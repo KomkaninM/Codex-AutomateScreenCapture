@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import _thread
 import copy
 import json
 import os
@@ -10,6 +11,7 @@ import secrets
 import sys
 import time
 from pathlib import Path
+from contextlib import nullcontext
 
 from config import BASE_DIR, Settings, macro_name
 from macro_player import MacroPlayer, enable_dpi_awareness
@@ -193,7 +195,13 @@ def main(argv=None):
         from launcher import ensure_env_file
 
         ensure_env_file(BASE_DIR)
-        run(args, Settings.load())
+        from runtime_control import environment_control
+
+        control = environment_control(BASE_DIR)
+        with control.watch(_thread.interrupt_main) if control else nullcontext():
+            if control and control.stop_requested():
+                raise KeyboardInterrupt
+            run(args, Settings.load())
         return 0
     except KeyboardInterrupt:
         print("\nMacro tool stopped.")

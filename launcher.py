@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import _thread
 import json
 import os
 import shutil
@@ -11,7 +12,7 @@ import sys
 import time
 import urllib.request
 import webbrowser
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -143,7 +144,7 @@ def launcher_lock(project):
         handle.close()
 
 
-def bootstrap(project, *, macro_tool=False):
+def bootstrap(project, *, macro_tool=False, gui=False):
     validate_interpreter(interpreter_info(sys.executable))
     python = project / ".venv-launcher" / "Scripts" / "python.exe"
     if not python.exists():
@@ -161,6 +162,24 @@ def bootstrap(project, *, macro_tool=False):
             "Rename that folder, then launch again. Your .env and BMS files are preserved."
         ) from None
     install_dependencies(project, python)
+    if gui:
+        subprocess.run(
+            [
+                str(python),
+                "-c",
+                "import tkinter; window=tkinter.Tk(); window.withdraw(); window.destroy()",
+            ],
+            check=True,
+        )
+        windowed = python.with_name("pythonw.exe")
+        subprocess.Popen(
+            [
+                str(windowed if windowed.exists() else python),
+                str(project / "control_panel.py"),
+            ],
+            cwd=project,
+        )
+        return 0
     args = (
         [str(python), str(project / "macro_tool.py")]
         if macro_tool
@@ -323,14 +342,14 @@ def start_tunnel(cfg, project):
         raise
 
 
-def connect_tunnel(cfg, project):
+def connect_tunnel(cfg, project, *, interactive=True):
     """One guided retry for a diagnosed authentication error; other failures stay visible."""
     for attempt in range(2):
         try:
             url, process = start_tunnel(cfg, project)
             return cfg, url, process
         except NgrokStartupError as exc:
-            if not exc.auth_problem or attempt == 1:
+            if not interactive or not exc.auth_problem or attempt == 1:
                 raise
             if os.environ.get("NGROK_AUTHTOKEN"):
                 raise RuntimeError(
@@ -357,12 +376,16 @@ def connect_tunnel(cfg, project):
                 )
 
 
-def prepare_configuration(project):
+def prepare_configuration(project, *, interactive=True):
     from config import Settings
 
     created = ensure_env_file(project)
     cfg = Settings.load(project)
     if created or not cfg.channel_access_token or not cfg.channel_secret:
+        if not interactive:
+            raise RuntimeError(
+                "Enter your LINE access token and channel secret in Settings, save, then Start."
+            )
         say(
             "First-time setup: enter your LINE token/secret and ngrok settings in .env."
         )
@@ -402,20 +425,33 @@ def prepare_configuration(project):
     return cfg
 
 
-def run_application(project):
+def run_application(project, *, control=None):
+    with control.watch(_thread.interrupt_main) if control else nullcontext():
+        return _run_application(project, control=control)
+
+
+def _run_application(project, *, control=None):
+    if control and control.stop_requested():
+        return 0
+    if control:
+        control.publish("preparing")
     say("Running application tests...")
     subprocess.run(
         [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-v"],
         cwd=project,
         check=True,
     )
-    cfg = prepare_configuration(project)
+    cfg = prepare_configuration(project, interactive=control is None)
     from line_api import LineAPI
 
     owned_ngrok = None
     server = None
     try:
-        cfg, url, owned_ngrok = connect_tunnel(cfg, project)
+        if control:
+            control.publish("connecting")
+        cfg, url, owned_ngrok = connect_tunnel(
+            cfg, project, interactive=control is None
+        )
         from config import RuntimeConfig
 
         RuntimeConfig(cfg).set_tunnel(url)
@@ -429,6 +465,8 @@ def run_application(project):
         server_environment = os.environ.copy()
         server_environment["NGROK_DOMAIN"] = urlsplit(url).hostname
         server_environment.pop("PUBLIC_TUNNEL_URL", None)
+        if control:
+            server_environment["BMS_CONTROL_SESSION"] = control.id
         server = subprocess.Popen(
             [sys.executable, str(project / "server.py")],
             cwd=project,
@@ -455,6 +493,8 @@ def run_application(project):
     finally:
         stop_owned_process(server)
         stop_owned_process(owned_ngrok)
+        if control:
+            control.publish("stopped")
 
 
 def main():
@@ -465,9 +505,21 @@ def main():
                 "Double-click start_bot.bat on your Windows PC. This launcher is Windows-only."
             )
         if "--run" in sys.argv:
+            if "--control-session" in sys.argv:
+                from runtime_control import ControlSession
+
+                index = sys.argv.index("--control-session")
+                if index + 1 >= len(sys.argv):
+                    raise ValueError("Missing local control session.")
+                with launcher_lock(ROOT):
+                    return run_application(
+                        ROOT, control=ControlSession(ROOT, sys.argv[index + 1])
+                    )
             return run_application(ROOT)
         with launcher_lock(ROOT):
-            return bootstrap(ROOT, macro_tool="--macro-tool" in sys.argv)
+            return bootstrap(
+                ROOT, macro_tool="--macro-tool" in sys.argv, gui="--gui" in sys.argv
+            )
     except KeyboardInterrupt:
         say("\nLauncher canceled.")
         return 130

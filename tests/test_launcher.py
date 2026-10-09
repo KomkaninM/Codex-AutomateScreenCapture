@@ -16,10 +16,36 @@ from launcher import (
     run_application,
     start_tunnel,
     prepare_configuration,
+    bootstrap,
 )
 
 
 class LauncherTests(unittest.TestCase):
+    def test_gui_bootstrap_uses_prepared_windowed_python_without_waiting_for_gui(self):
+        windowed = self.python.with_name("pythonw.exe")
+        windowed.touch()
+        with patch("launcher.validate_interpreter"), patch(
+            "launcher.interpreter_info", return_value={}
+        ), patch("launcher.install_dependencies"), patch(
+            "launcher.subprocess.run"
+        ) as run, patch(
+            "launcher.subprocess.Popen"
+        ) as popen:
+            self.assertEqual(bootstrap(self.root, gui=True), 0)
+        self.assertEqual(
+            popen.call_args.args[0],
+            [str(windowed), str(self.root / "control_panel.py")],
+        )
+        self.assertEqual(
+            run.call_args.args[0],
+            [
+                str(self.python),
+                "-c",
+                "import tkinter; window=tkinter.Tk(); window.withdraw(); window.destroy()",
+            ],
+        )
+        popen.return_value.wait.assert_not_called()
+
     def setUp(self):
         quiet = patch("launcher.say")
         quiet.start()

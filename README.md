@@ -4,6 +4,36 @@ A desktop BMS bridge with signed LINE webhooks, serialized automation, screensho
 
 ## Install and configure
 
+### Windows graphical control panel (recommended)
+
+Double-click **`start_gui.bat`** to open the native control panel. It reuses the existing launcher's Python environment and dependency installation, then closes the setup console after the app opens. No additional Python packages are required; use the standard Windows x64 Python 3.14 or 3.12 installation with **Tcl/Tk support**. The existing `start_bot.bat` console launcher still works. Stop any existing bot/launcher before starting one through the app.
+
+| Page | What you can do |
+| --- | --- |
+| **Dashboard** | Start/stop the bot, see setup checks and live logs, copy the webhook URL, check LINE quota, open the reports folder. |
+| **Settings** | Edit LINE/ngrok credentials, optional group/private IDs, default login/logout macros, auto-logout, loading delay, timezone, WebP quality, and advanced options. |
+| **Targets** | Add, edit, and remove target IDs/descriptions/macros in `targets.json`. |
+| **Macros** | Record/play a macro, import current or legacy JSON, select login/logout defaults, and import the login-page anchor crop. |
+| **Help** | Follow the first-run setup guide and find LINE command examples. |
+
+For your existing installation:
+
+1. Stop the current console bot using Ctrl+C and wait for it to finish.
+2. Update the application files while keeping your **`.env`, `targets.json`, `assets`, `scripts/macros`, and `screenshots`**. Keep `.venv-launcher` to reuse installed packages.
+3. Double-click `start_gui.bat`. Existing settings and macros load automatically.
+4. Review Settings, then click **Start Bot**. The existing launcher runs tests, configures/reuses ngrok, saves its detected domain, and starts the bot. Startup errors stay in Dashboard's live log instead of opening a hidden prompt.
+5. Send `capture` in LINE. The app minimizes when the bot goes online by default so it does not cover the BMS; you can turn this option off in Dashboard. Recording/playback also minimizes the app.
+
+Credentials are masked until you click **Show**. GUI launches use the project `.env`, without inherited Windows environment overrides. `GROUP_ID` remains optional and takes priority over `USER_ID`; both blank allow `check-id` discovery. An invalid existing setting can be corrected in the forms before startup.
+
+Click **Save settings** while stopped, or **Save & Restart Bot** for an owned running bot. Restart validates the form before stopping, drains active work, saves, and starts again. Save target changes while stopped. Editing is briefly disabled while a save/restart is in progress so newer changes cannot be overwritten by completion. Changes are not silently saved on exit. Other running launchers or macro players prevent file writes.
+
+Settings/target writes preserve unknown values and existing comments, reject stale forms, keep private backups under `.runtime/backups`, and replace files atomically. If OneDrive or permissions prevent replacement, the original file remains intact. Reload a form if LINE's `set-login` or another editor changed its file. Existing legacy variable aliases are updated alongside their canonical fields, including when clearing a value.
+
+Macro import accepts your existing `click_coord`, `type_text`, `press_key`, and post-delay schema and converts it through the same validated macro engine. Existing filenames are preserved; choose a new name for another recording/import. **Use for login/logout** selects the macro in Settings; save there to apply. The recorder uses **F8** to start/stop/export and **F9** to cancel. Playback gives five seconds to switch to BMS. Recorded text/passwords are not displayed in the macro list or included in logs. Selecting a login anchor replaces `assets/login_anchor.png` and keeps a private backup of the previous image.
+
+**Stop Bot** lets active capture/delivery/logout finish, then closes the server and only the ngrok process this launcher started. It leaves an external tunnel running. Closing the app asks before stopping active work or discarding unsaved changes. GUI shutdown uses a random per-run local control file, without exposing an HTTP shutdown endpoint. Live logs are bounded, credentials are redacted, and the latest log is saved to `.runtime/control_panel.log`.
+
 ### One-click Windows launcher
 
 Extract the complete downloaded ZIP into a normal folder, then double-click **`start_bot.bat`**. Install standard Windows x64 Python 3.14 (or 3.12) and download the official ngrok CLI once beforehand. Set `NGROK_EXE_PATH` in `.env` to its full path, put ngrok on PATH, or place `ngrok.exe` beside the launcher. No administrator privileges or PowerShell execution-policy changes are needed.
@@ -203,5 +233,7 @@ python3 -m venv .venv
 ```
 
 Tests substitute hardware and LINE HTTP transport while exercising real Flask routing, signature checks, a single pre-capture anchor check, synchronization, scheduling, image encoding, file serving, configuration persistence, and restart deduplication. Desktop libraries are loaded lazily, allowing service tests on a headless machine. Linux desktop operation additionally needs an active X display and a working clipboard provider; Windows is the deployment target.
+
+Control-panel tests also exercise actual Tk widgets, masked fields, saves/restarts, target editing, small-window layouts, stale-edit rejection, and owned subprocess shutdown. They run with an active desktop display and skip on a headless host. To include them in Linux CI, install Tk and Xvfb, then run `xvfb-run -a .venv/bin/python -m unittest discover -s tests -v`. GUI test cleanup collects destroyed windows on the Tk owner thread before starting later workers.
 
 Before unattended deployment, validate a real capture with and without the login anchor, each target macro, logout macro execution after LINE acceptance, simultaneous commands, stop/restart scheduling, ngrok image retrieval by LINE, and actual quota changes for scheduled pushes. No live LINE token or BMS desktop is available in the cloud checkout, so those deployment checks are not represented as completed.

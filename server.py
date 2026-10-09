@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import _thread
 import hashlib
 import hmac
 import json
@@ -13,7 +14,7 @@ import sqlite3
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 
 from flask import Flask, abort, jsonify, request, send_file
@@ -68,6 +69,10 @@ def load_targets(path: Path):
     if path.stat().st_size > 1_000_000:
         raise ValueError("targets.json is too large.")
     data = json.loads(path.read_text(encoding="utf-8"))
+    return validate_targets(data)
+
+
+def validate_targets(data):
     if not isinstance(data, list):
         raise ValueError("targets.json must be a list.")
     result = {}
@@ -381,24 +386,25 @@ def single_instance(project_dir):
         raise RuntimeError("Runtime lock cannot be a symlink.")
     handle = path.open("a+b")
     try:
-        import sys
+        try:
+            import sys
 
-        if sys.platform == "win32":
-            import msvcrt
+            if sys.platform == "win32":
+                import msvcrt
 
-            handle.write(b"0")
-            handle.flush()
-            handle.seek(0)
-            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
-        else:
-            import fcntl
+                handle.write(b"0")
+                handle.flush()
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
 
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except (BlockingIOError, OSError) as exc:
+            raise RuntimeError(
+                "Could not acquire bot instance lock; stop other bot processes."
+            ) from exc
         yield
-    except (BlockingIOError, OSError) as exc:
-        raise RuntimeError(
-            "Could not acquire bot instance lock; stop other bot processes."
-        ) from exc
     finally:
         handle.close()
 
@@ -431,11 +437,23 @@ def main():
 
         signal.signal(signal.SIGINT, stop)
         signal.signal(signal.SIGTERM, stop)
+        from runtime_control import environment_control
+
+        control = environment_control(cfg.project_dir)
         try:
-            startup_banner(cfg, bot.line)
-            bot.scheduler.start()
-            dispatcher.submit(lambda: send_online_notification(cfg, bot.line))
-            http.run()
+            with control.watch(_thread.interrupt_main) if control else nullcontext():
+                if control and control.stop_requested():
+                    raise KeyboardInterrupt
+                startup_banner(cfg, bot.line)
+                bot.scheduler.start()
+                dispatcher.submit(lambda: send_online_notification(cfg, bot.line))
+                if control:
+                    control.publish(
+                        "online",
+                        port=cfg.port,
+                        webhook=cfg.public_tunnel_url + "/callback",
+                    )
+                http.run()
         except KeyboardInterrupt:
             log.info("Stopping scheduler and draining desktop transactions.")
         finally:

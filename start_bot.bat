@@ -50,5 +50,6 @@ exit /b 1
 :finished
 if not "%BOT_EXIT%"=="0" echo Launcher stopped. Read the message above for the next step.
 popd
+if "%~1"=="--gui" if "%BOT_EXIT%"=="0" exit /b 0
 pause
 exit /b %BOT_EXIT%
