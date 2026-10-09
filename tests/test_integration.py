@@ -5,6 +5,7 @@ import io
 import json
 import os
 import tempfile
+import threading
 import time
 import unittest
 from concurrent.futures import Future
@@ -166,8 +167,6 @@ class IntegrationTests(unittest.TestCase):
 
     def test_scheduled_capture_only_pushes_and_cancelled_job_does_nothing(self):
         bot = self.make_bot()
-        import threading
-
         cancel = threading.Event()
         bot._scheduled("07C", "scheduled", cancel)
         bot.line.push.assert_called_once()
@@ -208,6 +207,114 @@ class IntegrationTests(unittest.TestCase):
                 401,
             )
         self.assertEqual(bot.handle.call_count, 0)
+
+    def test_private_commands_are_authorized_by_user_id_when_group_is_blank(self):
+        self.runtime = RuntimeConfig(
+            replace(self.runtime.snapshot(), group_id="", user_id="user")
+        )
+        bot = self.make_bot()
+        replied = threading.Event()
+        bot.line.reply.side_effect = lambda *args: replied.set()
+        app = create_app(self.runtime, bot=bot, dispatcher=self.worker)
+        with app.test_client() as client:
+            for index, source in enumerate(
+                (
+                    {"type": "user", "userId": "other"},
+                    {"type": "group", "groupId": "group", "userId": "user"},
+                    {"type": "user", "userId": "user"},
+                )
+            ):
+                event = self.event(id=str(index)) | {"source": source}
+                self.assertEqual(
+                    self.signed(client, {"events": [event]}).status_code, 200
+                )
+        self.assertTrue(replied.wait(2), "Authorized private reply must finish.")
+        self.worker.close()
+        bot.line.reply.assert_called_once()
+        self.assertEqual(bot.line.reply.call_args.args[1][0]["type"], "image")
+        bot.line.push.assert_not_called()
+
+    def test_group_takes_priority_over_user_for_ingress_and_scheduled_delivery(self):
+        self.runtime = RuntimeConfig(replace(self.runtime.snapshot(), user_id="user"))
+        bot = self.make_bot()
+        replied = threading.Event()
+        bot.line.reply.side_effect = lambda *args: replied.set()
+        app = create_app(self.runtime, bot=bot, dispatcher=self.worker)
+        with app.test_client() as client:
+            private = self.event(id="private") | {
+                "source": {"type": "user", "userId": "user"}
+            }
+            self.signed(client, {"events": [private, self.event(id="group")]})
+        self.assertTrue(replied.wait(2), "Authorized group reply must finish.")
+        self.worker.close()
+        bot.line.reply.assert_called_once()
+        bot._scheduled(None, "", threading.Event())
+        self.assertEqual(bot.line.push.call_args.args[0], "group")
+
+    def test_private_schedule_pushes_to_user_and_never_uses_reply(self):
+        self.runtime = RuntimeConfig(
+            replace(self.runtime.snapshot(), group_id="", user_id="user")
+        )
+        bot = self.make_bot()
+        event = self.event("start-capture 30m") | {
+            "source": {"type": "user", "userId": "user"}
+        }
+        bot.handle(event, time.monotonic())
+        self.assertEqual(len(bot.scheduler.jobs), 1)
+        bot.line.reply.assert_called_once()
+        bot.line.push.assert_not_called()
+        bot._scheduled(None, "private", threading.Event())
+        self.assertEqual(bot.line.push.call_args.args[0], "user")
+
+    def test_check_id_discovery_works_in_private_and_group_chats_without_configured_ids(
+        self,
+    ):
+        replied = threading.Event()
+        self.runtime = RuntimeConfig(
+            replace(self.runtime.snapshot(), group_id="", user_id="")
+        )
+        bot = self.make_bot()
+        bot.line.reply.side_effect = lambda *args: (
+            replied.set() if bot.line.reply.call_count == 2 else None
+        )
+        app = create_app(self.runtime, bot=bot, dispatcher=self.worker)
+        with app.test_client() as client:
+            private = self.event("check-id", "private") | {
+                "source": {"type": "user", "userId": "user"}
+            }
+            self.signed(
+                client,
+                {
+                    "events": [
+                        private,
+                        self.event("check-id", "group"),
+                        self.event("capture", "blocked"),
+                    ]
+                },
+            )
+        self.assertTrue(
+            replied.wait(2),
+            "Both discovery replies should complete before shutting down the queue.",
+        )
+        self.worker.close()
+        self.assertEqual(bot.line.reply.call_count, 2)
+        bot.workflow.player.play.assert_not_called()
+        bot.line.push.assert_not_called()
+
+    def test_invalid_private_user_id_is_rejected_as_malformed_payload(self):
+        app = create_app(self.runtime, bot=Mock(), dispatcher=self.worker)
+        event = self.event() | {"source": {"type": "user", "userId": ["user"]}}
+        with app.test_client() as client:
+            self.assertEqual(self.signed(client, {"events": [event]}).status_code, 400)
+
+    def test_private_dashboard_does_not_request_group_member_metrics(self):
+        cfg = replace(self.runtime.snapshot(), group_id="", user_id="user")
+        line = Mock(quota=lambda: {"limit": 500, "consumed": 10, "remaining": 490})
+        with redirect_stdout(io.StringIO()) as output:
+            startup_banner(cfg, line)
+        line.group_reach.assert_not_called()
+        self.assertIn("Private", output.getvalue())
+        self.assertIn("user", output.getvalue())
 
     def test_webhook_redelivery_is_suppressed_after_app_restart(self):
         bot = Mock()

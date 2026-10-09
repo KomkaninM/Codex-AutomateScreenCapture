@@ -106,13 +106,13 @@ class LineAPI:
             payload={"replyToken": reply_token, "messages": self._messages(messages)},
         )
 
-    def push(self, group_id, messages):
-        if not group_id:
-            raise ValueError("Scheduled delivery requires GROUP_ID.")
+    def push(self, recipient_id, messages):
+        if not recipient_id:
+            raise ValueError("Scheduled delivery requires GROUP_ID or USER_ID.")
         return self._request(
             "POST",
             "/message/push",
-            payload={"to": group_id, "messages": self._messages(messages)},
+            payload={"to": recipient_id, "messages": self._messages(messages)},
             retry_key=str(uuid.uuid4()),
         )
 
@@ -154,7 +154,7 @@ class LineAPI:
             if not cursor:
                 return ids
 
-    def status_text(self, group_id):
+    def status_text(self, group_id, user_id=""):
         lines = []
         try:
             quota = self.quota()
@@ -165,11 +165,18 @@ class LineAPI:
             ]
         except (LineAPIError, ValueError, KeyError, TypeError) as exc:
             lines.append(f"Quota unavailable: {exc}")
-        try:
-            members = self.group_reach(group_id)
+        if group_id:
+            try:
+                members = self.group_reach(group_id)
+                lines.append(
+                    f'Group members: {members if members is not None else "unavailable"} (upper bound; unblocked reach unavailable)'
+                )
+            except (LineAPIError, ValueError, KeyError, TypeError):
+                lines.append("Group reach unavailable for this account/group.")
+        elif user_id:
             lines.append(
-                f'Group members: {members if members is not None else "unavailable"} (upper bound; unblocked reach unavailable)'
+                "Private delivery: up to 1 user (requires friendship and unblocked bot)."
             )
-        except (LineAPIError, ValueError, KeyError, TypeError):
-            lines.append("Group reach unavailable for this account/group.")
+        else:
+            lines.append("Delivery destination is not configured; use check-id.")
         return "\n".join(lines)

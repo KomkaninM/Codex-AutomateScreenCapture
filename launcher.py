@@ -10,9 +10,17 @@ import subprocess
 import sys
 import time
 import urllib.request
+import webbrowser
 from contextlib import contextmanager
 from pathlib import Path
 from urllib.parse import urlsplit
+
+from ngrok_runner import (
+    NgrokDiagnostics,
+    NgrokStartupError,
+    TOKEN_PAGE,
+    prepare_auth_config,
+)
 
 ROOT = Path(__file__).resolve().parent
 
@@ -253,41 +261,92 @@ def start_tunnel(cfg, project):
             "Set NGROK_EXE_PATH in .env, add it to PATH, or put ngrok.exe beside "
             "start_bot.bat, then launch again."
         )
-    from dotenv import dotenv_values
-
     environment = os.environ.copy()
-    auth = environment.get("NGROK_AUTHTOKEN") or dotenv_values(project / ".env").get(
-        "NGROK_AUTHTOKEN"
-    )
-    if auth:
-        environment["NGROK_AUTHTOKEN"] = auth
+    auth_config = prepare_auth_config(cfg, project)
+    if cfg.ngrok_authtoken:
+        environment["NGROK_AUTHTOKEN"] = cfg.ngrok_authtoken
     args = [binary, "http", str(cfg.port)]
     if domain:
         args.append("--domain=" + domain)
-    say("Starting ngrok in a separate console...")
+    if auth_config:
+        args.append("--config=" + str(auth_config))
+        say("Configured ngrok authentication automatically from .env (token hidden).")
+    args.extend(["--log=stdout", "--log-format=json", "--log-level=info"])
+    diagnostics = NgrokDiagnostics(
+        project,
+        secrets=(
+            cfg.ngrok_authtoken,
+            cfg.channel_access_token,
+            cfg.channel_secret,
+            cfg.internal_api_token,
+        ),
+    )
+    say("Starting ngrok. Errors will stay in this window; log: .runtime/ngrok.log")
     process = subprocess.Popen(
         args,
         cwd=project,
         env=environment,
-        creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
+    diagnostics.start(process.stdout)
     try:
         stop_at = time.monotonic() + 30
         while time.monotonic() < stop_at:
-            if process.poll() is not None:
-                raise RuntimeError(
-                    "ngrok stopped. Check its console for an authentication or domain error."
-                )
+            exit_code = process.poll()
+            if exit_code is not None:
+                diagnostics.join()
+                raise NgrokStartupError(diagnostics.error_code, exit_code)
             url = find_tunnel(read_tunnels(), cfg.port, domain or "")
             if url:
                 return url, process
             time.sleep(0.25)
         raise RuntimeError(
-            "ngrok did not expose an HTTPS tunnel within 30 seconds. Check its console."
+            "ngrok did not expose an HTTPS tunnel within 30 seconds. Check .runtime/ngrok.log "
+            "and make sure NGROK_DOMAIN belongs to your account (or leave it blank)."
         )
     except BaseException:
         stop_owned_process(process)
+        diagnostics.join()
         raise
+
+
+def connect_tunnel(cfg, project):
+    """One guided retry for a diagnosed authentication error; other failures stay visible."""
+    for attempt in range(2):
+        try:
+            url, process = start_tunnel(cfg, project)
+            return cfg, url, process
+        except NgrokStartupError as exc:
+            if not exc.auth_problem or attempt == 1:
+                raise
+            if os.environ.get("NGROK_AUTHTOKEN"):
+                raise RuntimeError(
+                    "The Windows NGROK_AUTHTOKEN environment value overrides .env and was rejected. "
+                    "Correct that environment value and relaunch. " + str(exc)
+                ) from None
+            say(str(exc))
+            say("One-time setup: copy Your Authtoken from " + TOKEN_PAGE)
+            say(
+                "Opening your ngrok dashboard and .env. Paste the token into NGROK_AUTHTOKEN, then save."
+            )
+            try:
+                webbrowser.open(TOKEN_PAGE)
+            except webbrowser.Error:
+                say("Open the dashboard link above manually.")
+            subprocess.Popen(["notepad.exe", str(project / ".env")])
+            input("Press Enter after saving NGROK_AUTHTOKEN in .env: ")
+            from config import Settings
+
+            cfg = Settings.load(project)
+            if not cfg.ngrok_authtoken:
+                raise RuntimeError(
+                    "NGROK_AUTHTOKEN is still blank. Save your account token in .env and relaunch."
+                )
 
 
 def prepare_configuration(project):
@@ -309,9 +368,14 @@ def prepare_configuration(project):
         raise RuntimeError(
             "CHANNEL_ACCESS_TOKEN and LINE_CHANNEL_SECRET are still missing in .env."
         )
-    if not cfg.group_id:
+    if not cfg.delivery_id:
         say(
-            "GROUP_ID is blank: use check-id in your LINE group, add the returned ID to .env, then relaunch."
+            "GROUP_ID and USER_ID are blank: send check-id in a private chat or your group, "
+            "save the desired USER_ID or GROUP_ID in .env, then relaunch."
+        )
+    else:
+        say(
+            f"LINE delivery mode: {cfg.delivery_kind} ({cfg.delivery_id}). GROUP_ID takes priority over USER_ID."
         )
     required = [
         cfg.macros_dir / cfg.default_login_macro,
@@ -341,7 +405,7 @@ def run_application(project):
     owned_ngrok = None
     server = None
     try:
-        url, owned_ngrok = start_tunnel(cfg, project)
+        cfg, url, owned_ngrok = connect_tunnel(cfg, project)
         from config import RuntimeConfig
 
         RuntimeConfig(cfg).set_tunnel(url)

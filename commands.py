@@ -116,13 +116,13 @@ class Bot:
 
     def _scheduled(self, target, note, cancel):
         cfg = self.runtime.snapshot()
-        if not cfg.public_tunnel_url or not cfg.group_id:
+        if not cfg.public_tunnel_url or not cfg.delivery_id:
             raise RuntimeError(
-                "Scheduled captures require GROUP_ID and a public HTTPS tunnel."
+                "Scheduled captures require GROUP_ID or USER_ID and a public HTTPS tunnel."
             )
         shot = self.workflow.capture(target, cancel=cancel)
         if not cancel.is_set():
-            self.line.push(cfg.group_id, self._image_messages(shot, note))
+            self.line.push(cfg.delivery_id, self._image_messages(shot, note))
 
     def cancel_schedules(self):
         return self.scheduler.stop_all()
@@ -164,9 +164,13 @@ class Bot:
                     )
                 ]
             elif command.name == "check-quota":
-                messages = [self.line.text(self.line.status_text(cfg.group_id))]
-            elif not cfg.group_id:
-                messages = [self.line.text("Configure GROUP_ID before automation.")]
+                messages = [
+                    self.line.text(self.line.status_text(cfg.group_id, cfg.user_id))
+                ]
+            elif not cfg.delivery_id:
+                messages = [
+                    self.line.text("Configure GROUP_ID or USER_ID before automation.")
+                ]
             elif command.name == "stop-capture":
                 messages = [self.line.text(f"Stopped {stopped_count} schedule(s).")]
             elif command.name == "set-login":

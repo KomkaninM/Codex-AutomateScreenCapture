@@ -1,6 +1,6 @@
 # BMS Automation LINE Bot
 
-A desktop BMS bridge with signed LINE webhooks, serialized automation, screenshot archival, and scheduled group delivery. Python 3.11+ is required; the application tests cover Python 3.12 and 3.14. On Windows use the standard **64-bit x64 Python build** (not ARM64 or free-threaded Python). Run one bot process in the logged-in Windows desktop session; this is not a Windows service that runs on the noninteractive service desktop.
+A desktop BMS bridge with signed LINE webhooks, serialized automation, screenshot archival, and scheduled group or private-chat delivery. Python 3.11+ is required; the application tests cover Python 3.12 and 3.14. On Windows use the standard **64-bit x64 Python build** (not ARM64 or free-threaded Python). Run one bot process in the logged-in Windows desktop session; this is not a Windows service that runs on the noninteractive service desktop.
 
 ## Install and configure
 
@@ -10,12 +10,13 @@ Extract the complete downloaded ZIP into a normal folder, then double-click **`s
 
 The launcher creates its own `.venv-launcher`, installs the pinned packages using prebuilt native dependencies, checks the installation, runs the full test suite, starts/reuses ngrok, saves the detected hostname as `NGROK_DOMAIN`, and starts `server.py`. The bot builds its HTTPS image URLs from that domain automatically. Later launches reuse installed dependencies unless `requirements.txt` changes or the package check fails. The console stays open to show status and errors. A launcher lock prevents two double-clicks from running setup concurrently.
 
-On the first launch it copies `.env.example` to `.env` only if `.env` does not already exist, opens Notepad, and waits for you to save your LINE credentials and ngrok settings. Use `NGROK_AUTHTOKEN` in your private `.env` or ngrok's existing authenticated configuration. The launcher passes authentication through the ngrok process environment, not command-line arguments. Existing settings, operator macros, reference images, and screenshots are preserved. Missing BMS files are listed; the server can still start for `check-id` setup, while capture remains blocked until the recorded files are supplied.
+On the first launch it copies `.env.example` to `.env` only if `.env` does not already exist, opens Notepad, and waits for you to save your LINE credentials and ngrok settings. Use `NGROK_AUTHTOKEN` in your private `.env` or ngrok's existing authenticated configuration. Get your account token from [the official ngrok dashboard](https://dashboard.ngrok.com/get-started/your-authtoken). A verified ngrok account and valid token are required for a new installation. The launcher automatically writes a project-local `.runtime/ngrok.yml` from `NGROK_AUTHTOKEN`; it does not overwrite your global ngrok configuration or put the token in command-line arguments. With a blank token it uses your existing ngrok authentication. Existing settings, operator macros, reference images, and screenshots are preserved. Missing BMS files are listed; the server can still start for `check-id` setup, while capture remains blocked until the recorded files are supplied.
 
 For example, add these ngrok settings to your private `.env`, replacing the example path and domain with your own:
 
 ```dotenv
 NGROK_EXE_PATH='C:\Users\HWTHR\Downloads\ngrok.exe'
+NGROK_AUTHTOKEN=your-account-authtoken
 NGROK_DOMAIN=your-domain.ngrok-free.app
 IMAGE_TTL_SECONDS=0
 ```
@@ -26,7 +27,9 @@ Use **single quotes** around Windows paths so backslashes are preserved; spaces 
 
 When upgrading an existing installation, edit your existing `.env` to add `NGROK_EXE_PATH` and change `IMAGE_TTL_SECONDS=604800` to `IMAGE_TTL_SECONDS=0` for image links without an expiration. The launcher preserves your file rather than replacing it with the new template. You can remove old `PUBLIC_TUNNEL_URL` and `CLOSE_MENU_MACRO` entries. All saved screenshots remain on disk for reporting regardless of the link expiry setting.
 
-The launcher prints the exact webhook URL to enter in LINE Developers. You must enable Use webhook and Webhook redelivery there and invite the bot to your group; it does not change LINE account settings automatically. With a blank `GROUP_ID`, send `check-id`, put the returned group ID into `.env`, then relaunch. Keep the BMS desktop at 100% scaling, awake, and unlocked, and record your BMS macros/reference images as described below.
+The launcher prints the exact webhook URL to enter in LINE Developers. Enable Use webhook and Webhook redelivery there. For group use, invite the bot to your group; for private use, add the bot as a LINE friend. With both IDs blank, send `check-id` in either chat, copy the desired group ID or user ID into `.env`, then relaunch. It does not change LINE account settings automatically. Keep the BMS desktop at 100% scaling, awake, and unlocked, and record your BMS macros/reference images as described below.
+
+Ngrok output is captured in the launcher window and saved to `.runtime/ngrok.log`; there is no separate console that disappears on failure. Tokens are redacted from diagnostics. On a recognized missing/invalid-token error, the launcher opens the official ngrok dashboard and your `.env` in Notepad, waits for you to save `NGROK_AUTHTOKEN`, and retries once. Domain conflicts, another running agent, and network errors remain visible with their error code. Never share your token or `.runtime/ngrok.yml`.
 
 Keep the launcher window open while using the bot. Press Ctrl+C to stop; it allows the bot to finish its active transaction and stops only the ngrok process it started. An already-running matching ngrok tunnel is reused and left running. If another ngrok agent uses port 4040 for a different port/domain, the launcher asks you to configure or stop it yourself. A private `.env` change takes effect on the next launch. `start_bot.bat` and the launcher flow require final validation on an actual Windows PC; automated tests on Linux exercise the helper behavior with process adapters.
 
@@ -43,7 +46,18 @@ Copy-Item .env.example .env
 
 Python 3.12 also works: substitute `py -3.12` when creating the environment. If the older download fails while compiling NumPy on Python 3.14, download the updated requirements, upgrade pip, and rerun the installation command above in your existing Python 3.14 environment. The binary-only option applies to the three native image dependencies; PyAutoGUI and its pure-Python helpers may still build wheels locally. No Visual Studio compiler is required for these native dependencies on Windows x64.
 
-Edit `.env` locally. Set `CHANNEL_ACCESS_TOKEN`, `LINE_CHANNEL_SECRET`, `GROUP_ID`, and `NGROK_DOMAIN` (hostname only). `USER_ID` is retained for compatibility; this bot delivers scheduled messages only to `GROUP_ID`. A blank group permits only `check-id` discovery from group chats; once the group is configured, events from other groups are ignored. Any member of the configured group can issue commands, including macros and configuration changes. Use a trusted operator group.
+Edit `.env` locally. Set `CHANNEL_ACCESS_TOKEN`, `LINE_CHANNEL_SECRET`, and your ngrok settings (`NGROK_DOMAIN` is a hostname only). Choose a chat mode:
+
+- **Group:** set `GROUP_ID`. It takes priority over `USER_ID`; only that group can issue commands and scheduled captures go there. Any member can run macros and configuration commands, so use a trusted operator group.
+- **Private:** leave `GROUP_ID` blank and set `USER_ID` to the ID returned by `check-id` in your private chat. Only that user can issue commands and scheduled captures go to that user. The bot must be a friend and unblocked for pushes.
+- **Discovery:** leave both blank. Only `check-id` works, from a private or group chat; desktop commands remain blocked until an ID is configured.
+
+For private mode, your `.env` contains:
+
+```dotenv
+GROUP_ID=
+USER_ID=Uyour-user-id-from-check-id
+```
 
 The template follows the variable names and defaults in the supplied Python configuration loader. `LINE_CHANNEL_ACCESS_TOKEN` and `DEFAULT_LOGIN_MACRO` are supported aliases; `CHANNEL_ACCESS_TOKEN` and `LOGIN_MACRO_SCRIPT` take precedence when nonempty. Process environment values override `.env`. `set-login` and auto-logout toggles are synchronized and persisted to `.env`; external process-level overrides still take precedence after restart. Keep `.env`, desktop macros, and screenshots private; they are ignored by Git. No token values are printed at startup.
 
@@ -74,7 +88,7 @@ The template follows the variable names and defaults in the supplied Python conf
 | `macro name.json` | Replay a validated local macro. |
 | `enable-autologout` / `disable-autologout` | Persist the post-capture logout setting. |
 | `check-id` | Reply with the event's group and user IDs. |
-| `check-quota` | Reply with monthly limit, consumption, remaining quota, and group-member upper bound. |
+| `check-quota` | Reply with monthly limit, consumption, remaining quota, and recipient reach information. |
 | `help` | Show command usage. |
 
 Quote notes when needed. Macro names can omit `.json`; path traversal and arbitrary shell commands are rejected. Intervals use `s`, `m`, or `h` and must be between ten seconds and 365 days. Local schedule times use `TIMEZONE` (default `Asia/Bangkok`); a time already passed means tomorrow. Schedules are **in memory** and must be recreated after restart. Missed intervals are skipped rather than replayed as a backlog. Prechecks run ten seconds early on a best-effort basis; a busy desktop can delay them and the capture. Capture waits for its own precheck to finish and rechecks the session. A session timeout during navigation receives one relogin attempt; unknown states remain blocked. `stop-capture` cancels immediately at authenticated ingress and invalidates older queued schedule registrations. A push already sent to LINE cannot be recalled. If the acknowledgement queue is saturated, cancellation still succeeds but its reply may be omitted; the completed stop remains deduplicated.

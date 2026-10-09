@@ -1,4 +1,5 @@
 import subprocess
+import io
 import tempfile
 import unittest
 from types import SimpleNamespace
@@ -104,7 +105,7 @@ class LauncherTests(unittest.TestCase):
         )
 
     def test_shutdown_only_stops_owned_process(self):
-        process = Mock(poll=lambda: None)
+        process = Mock(poll=lambda: None, stdout=io.StringIO(""))
         stop_owned_process(None)
         process.terminate.assert_not_called()
         stop_owned_process(process)
@@ -228,7 +229,7 @@ class LauncherTests(unittest.TestCase):
             f"NGROK_EXE_PATH='{binary}'\nNGROK_DOMAIN=bms.ngrok.app\n"
         )
         cfg = Settings.load(self.root, environ={})
-        process = Mock(poll=lambda: None)
+        process = Mock(poll=lambda: None, stdout=io.StringIO(""))
         data = {
             "tunnels": [
                 {
@@ -243,10 +244,10 @@ class LauncherTests(unittest.TestCase):
             url, owned = start_tunnel(cfg, self.root)
         self.assertEqual(url, "https://bms.ngrok.app")
         self.assertIs(owned, process)
-        self.assertEqual(
-            popen.call_args.args[0],
-            [str(binary), "http", "5000", "--domain=bms.ngrok.app"],
-        )
+        args = popen.call_args.args[0]
+        self.assertEqual(args[:3], [str(binary), "http", "5000"])
+        self.assertIn("--domain=bms.ngrok.app", args)
+        self.assertIn("--log=stdout", args)
 
     def test_missing_configured_ngrok_path_does_not_silently_use_another_copy(self):
         (self.root / ".env").write_text("NGROK_EXE_PATH='missing/ngrok.exe'\n")
@@ -273,7 +274,8 @@ class LauncherTests(unittest.TestCase):
             ]
         }
         with patch("launcher.read_tunnels", side_effect=[None, data]), patch(
-            "launcher.subprocess.Popen", return_value=Mock(poll=lambda: None)
+            "launcher.subprocess.Popen",
+            return_value=Mock(poll=lambda: None, stdout=io.StringIO("")),
         ) as popen, patch("launcher.shutil.which", return_value="other-ngrok"):
             start_tunnel(cfg, self.root)
         self.assertEqual(popen.call_args.args[0][0], str(binary))

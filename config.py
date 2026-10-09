@@ -69,6 +69,7 @@ class Settings:
     public_tunnel_url: str = ""
     ngrok_domain: str = ""
     ngrok_exe_path: str = ""
+    ngrok_authtoken: str = ""
     default_login_macro: str = "login_bms.json"
     logout_macro: str = "logout.json"
     auto_logout: bool = False
@@ -83,6 +84,14 @@ class Settings:
     max_macro_seconds: float = 35.0
     image_ttl_seconds: int = 0
     login_wait_seconds: float = 5.0
+
+    @property
+    def delivery_id(self) -> str:
+        return self.group_id or self.user_id
+
+    @property
+    def delivery_kind(self) -> str:
+        return "group" if self.group_id else "user" if self.user_id else "unconfigured"
 
     @property
     def macros_dir(self) -> Path:
@@ -124,6 +133,7 @@ class Settings:
             public_tunnel_url=url,
             ngrok_domain=urlsplit(url).hostname or "",
             ngrok_exe_path=val("NGROK_EXE_PATH"),
+            ngrok_authtoken=val("NGROK_AUTHTOKEN").strip(),
             default_login_macro=macro_name(
                 val("LOGIN_MACRO_SCRIPT", "login_bms.json", "DEFAULT_LOGIN_MACRO")
             ),

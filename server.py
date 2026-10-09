@@ -163,6 +163,8 @@ def create_app(runtime=None, *, bot=None, dispatcher=None):
                             raise ValueError()
                         if not isinstance(source.get("groupId", ""), str):
                             raise ValueError()
+                        if not isinstance(source.get("userId", ""), str):
+                            raise ValueError()
                         if not isinstance(event.get("webhookEventId", ""), str):
                             raise ValueError()
         except (ValueError, KeyError, TypeError):
@@ -176,10 +178,16 @@ def create_app(runtime=None, *, bot=None, dispatcher=None):
                 ):
                     continue
                 source = event["source"]
-                if source.get("type") != "group" or not source.get("groupId"):
+                kind = source.get("type")
+                source_id = (
+                    source.get("groupId")
+                    if kind == "group"
+                    else source.get("userId") if kind == "user" else None
+                )
+                if not source_id:
                     continue
-                if cfg.group_id:
-                    if source["groupId"] != cfg.group_id:
+                if cfg.delivery_id:
+                    if kind != cfg.delivery_kind or source_id != cfg.delivery_id:
                         continue
                 elif event["message"]["text"].strip().lower() != "check-id":
                     continue
@@ -283,7 +291,9 @@ def startup_banner(cfg, line):
         "[CONFIG]\n"
         f" • Port:                  {cfg.port}\n"
         f' • ngrok Domain:          {cfg.public_tunnel_url or cfg.ngrok_domain or "not configured"}\n'
-        f' • Active Group ID:       {cfg.group_id or "not configured (check-id discovery only)"}\n'
+        f' • Active Group ID:       {cfg.group_id or "not configured"}\n'
+        f' • Active User ID:        {cfg.user_id or "not configured"}\n'
+        f' • Delivery Mode:         {cfg.delivery_kind} ({cfg.delivery_id or "check-id discovery only"})\n'
         f" • Default Login Macro:   {cfg.default_login_macro}\n"
         f" • Auto Logout:           {cfg.auto_logout} ({cfg.logout_macro})\n"
         f" • Reply Unknown Cmds:    {cfg.reply_unknown}\n\n[LINE MESSAGING QUOTA]",
@@ -302,15 +312,27 @@ def startup_banner(cfg, line):
             f" • Quota:                 unavailable ({type(exc).__name__}); check LINE credentials/network",
             flush=True,
         )
-    try:
-        reach = line.group_reach(cfg.group_id)
+    if cfg.group_id:
+        try:
+            reach = line.group_reach(cfg.group_id)
+            print(
+                f' • Target Reach (Group):  {reach if reach is not None else "unavailable"} members (upper bound; unblocked reach unavailable)',
+                flush=True,
+            )
+        except Exception:
+            print(
+                " • Target Reach (Group):  unavailable for this account/group",
+                flush=True,
+            )
+    elif cfg.user_id:
         print(
-            f' • Target Reach (Group):  {reach if reach is not None else "unavailable"} members (upper bound; unblocked reach unavailable)',
+            " • Target Reach (Private): up to 1 user (requires friendship and unblocked bot)",
             flush=True,
         )
-    except Exception:
+    else:
         print(
-            " • Target Reach (Group):  unavailable for this account/group", flush=True
+            " • Target Reach:          not configured (check-id discovery only)",
+            flush=True,
         )
     print(
         f"{border}\n🚀 Listening for webhooks on 0.0.0.0:{cfg.port}...\n{border}",
