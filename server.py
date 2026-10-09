@@ -263,7 +263,10 @@ def create_app(runtime=None, *, bot=None, dispatcher=None):
             path.name,
         ):
             abort(404)
-        if time.time() - path.stat().st_mtime > cfg.image_ttl_seconds:
+        if (
+            cfg.image_ttl_seconds > 0
+            and time.time() - path.stat().st_mtime > cfg.image_ttl_seconds
+        ):
             abort(404)
         response = send_file(path, conditional=True, max_age=3600)
         response.headers["X-Content-Type-Options"] = "nosniff"

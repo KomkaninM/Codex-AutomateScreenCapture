@@ -68,9 +68,9 @@ class Settings:
     group_id: str = ""
     public_tunnel_url: str = ""
     ngrok_domain: str = ""
+    ngrok_exe_path: str = ""
     default_login_macro: str = "login_bms.json"
     logout_macro: str = "logout.json"
-    close_menu_macro: str = "close_menu.json"
     auto_logout: bool = False
     reply_unknown: bool = False
     settle_delay: float = 2.0
@@ -81,7 +81,7 @@ class Settings:
     expected_width: int = 1920
     expected_height: int = 1080
     max_macro_seconds: float = 35.0
-    image_ttl_seconds: int = 604800
+    image_ttl_seconds: int = 0
     login_wait_seconds: float = 5.0
 
     @property
@@ -111,10 +111,11 @@ class Settings:
             return env.get(name) or (env.get(alias) if alias else None) or default
 
         domain = val("NGROK_DOMAIN")
-        url = val(
-            "PUBLIC_TUNNEL_URL",
-            ("https://" + domain if domain and "://" not in domain else domain),
-        )
+        # The domain is canonical; older installations may still supply the URL alias.
+        url = (
+            "https://" + domain if domain and "://" not in domain else domain
+        ) or val("PUBLIC_TUNNEL_URL")
+        url = public_url(url) if url else ""
         cfg = cls(
             project_dir=Path(project_dir).resolve(),
             port=int(val("PORT", "5000")),
@@ -124,13 +125,13 @@ class Settings:
             channel_secret=val("LINE_CHANNEL_SECRET"),
             user_id=val("USER_ID"),
             group_id=val("GROUP_ID"),
-            public_tunnel_url=public_url(url) if url else "",
-            ngrok_domain=domain,
+            public_tunnel_url=url,
+            ngrok_domain=urlsplit(url).hostname or "",
+            ngrok_exe_path=val("NGROK_EXE_PATH"),
             default_login_macro=macro_name(
                 val("LOGIN_MACRO_SCRIPT", "login_bms.json", "DEFAULT_LOGIN_MACRO")
             ),
             logout_macro=macro_name(val("LOGOUT_MACRO_SCRIPT", "logout.json")),
-            close_menu_macro=macro_name(val("CLOSE_MENU_MACRO", "close_menu.json")),
             auto_logout=boolean(val("ENABLE_AUTO_LOGOUT", "False")),
             reply_unknown=boolean(val("REPLY_UNKNOWN_COMMANDS", "False")),
             settle_delay=float(val("MACRO_SETTLE_DELAY", "2.0")),
@@ -141,7 +142,7 @@ class Settings:
             expected_width=int(val("DESKTOP_WIDTH", "1920")),
             expected_height=int(val("DESKTOP_HEIGHT", "1080")),
             max_macro_seconds=float(val("MAX_MACRO_SECONDS", "35")),
-            image_ttl_seconds=int(val("IMAGE_TTL_SECONDS", "604800")),
+            image_ttl_seconds=int(val("IMAGE_TTL_SECONDS", "0")),
             login_wait_seconds=float(val("LOGIN_WAIT_SECONDS", "5")),
         )
         ZoneInfo(cfg.timezone)
@@ -164,7 +165,7 @@ class Settings:
         if (
             not 0 < cfg.confidence <= 1
             or cfg.max_macro_seconds <= 0
-            or cfg.image_ttl_seconds <= 0
+            or cfg.image_ttl_seconds < 0
         ):
             raise ValueError("Invalid confidence, macro duration, or image TTL.")
         return cfg
@@ -194,6 +195,8 @@ class RuntimeConfig:
         self._persist("ENABLE_AUTO_LOGOUT", str(enabled), auto_logout=enabled)
 
     def set_tunnel(self, url: str):
+        url = public_url(url)
+        domain = urlsplit(url).hostname
         self._persist(
-            "PUBLIC_TUNNEL_URL", public_url(url), public_tunnel_url=public_url(url)
+            "NGROK_DOMAIN", domain, ngrok_domain=domain, public_tunnel_url=url
         )

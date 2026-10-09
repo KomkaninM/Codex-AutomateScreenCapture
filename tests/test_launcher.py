@@ -4,6 +4,7 @@ import unittest
 from types import SimpleNamespace
 from pathlib import Path
 from unittest.mock import Mock, patch
+from config import Settings
 
 from launcher import (
     ensure_env_file,
@@ -121,7 +122,11 @@ class LauncherTests(unittest.TestCase):
         )
         server = Mock(poll=lambda: 0, wait=lambda: 0)
         with patch(
-            "launcher.os.environ", {"PUBLIC_TUNNEL_URL": "https://stale.ngrok.app"}
+            "launcher.os.environ",
+            {
+                "PUBLIC_TUNNEL_URL": "https://stale.ngrok.app",
+                "NGROK_DOMAIN": "stale.ngrok.app",
+            },
         ), patch(
             "launcher.subprocess.run", return_value=subprocess.CompletedProcess([], 0)
         ), patch(
@@ -131,8 +136,13 @@ class LauncherTests(unittest.TestCase):
         ) as popen:
             run_application(self.root)
         self.assertEqual(
-            popen.call_args.kwargs["env"]["PUBLIC_TUNNEL_URL"],
+            Settings.load(
+                self.root, environ=popen.call_args.kwargs["env"]
+            ).public_tunnel_url,
             "https://actual.ngrok.app",
+        )
+        self.assertEqual(
+            popen.call_args.kwargs["env"]["NGROK_DOMAIN"], "actual.ngrok.app"
         )
 
     def test_ctrl_c_allows_time_for_interactive_capture_and_logout(self):
@@ -182,9 +192,68 @@ class LauncherTests(unittest.TestCase):
             self.assertEqual(run_application(self.root), 7)
         config = (self.root / ".env").read_text()
         self.assertIn("CHANNEL_ACCESS_TOKEN=private", config)
-        self.assertIn("https://bms.ngrok.app", config)
+        self.assertIn("NGROK_DOMAIN='bms.ngrok.app'", config)
+        self.assertNotIn("PUBLIC_TUNNEL_URL=", config)
         self.assertTrue(any("unittest" in c.args[0] for c in runner.call_args_list))
         tunnel.terminate.assert_called_once()
+
+    def test_configured_ngrok_executable_with_spaces_is_used_automatically(self):
+        binary = self.root / "ngrok tools" / "ngrok.exe"
+        binary.parent.mkdir()
+        binary.touch()
+        (self.root / ".env").write_text(
+            f"NGROK_EXE_PATH='{binary}'\nNGROK_DOMAIN=bms.ngrok.app\n"
+        )
+        cfg = Settings.load(self.root, environ={})
+        process = Mock(poll=lambda: None)
+        data = {
+            "tunnels": [
+                {
+                    "public_url": "https://bms.ngrok.app",
+                    "config": {"addr": "http://localhost:5000"},
+                }
+            ]
+        }
+        with patch("launcher.read_tunnels", side_effect=[None, data]), patch(
+            "launcher.subprocess.Popen", return_value=process
+        ) as popen, patch("launcher.shutil.which", return_value="other-ngrok"):
+            url, owned = start_tunnel(cfg, self.root)
+        self.assertEqual(url, "https://bms.ngrok.app")
+        self.assertIs(owned, process)
+        self.assertEqual(
+            popen.call_args.args[0],
+            [str(binary), "http", "5000", "--domain=bms.ngrok.app"],
+        )
+
+    def test_missing_configured_ngrok_path_does_not_silently_use_another_copy(self):
+        (self.root / ".env").write_text("NGROK_EXE_PATH='missing/ngrok.exe'\n")
+        cfg = Settings.load(self.root, environ={})
+        with patch("launcher.read_tunnels", return_value=None), patch(
+            "launcher.subprocess.Popen"
+        ) as popen, patch("launcher.shutil.which", return_value="other-ngrok"):
+            with self.assertRaisesRegex(RuntimeError, "NGROK_EXE_PATH"):
+                start_tunnel(cfg, self.root)
+        popen.assert_not_called()
+
+    def test_relative_ngrok_path_is_resolved_from_the_project_folder(self):
+        binary = self.root / "tools" / "ngrok.exe"
+        binary.parent.mkdir()
+        binary.touch()
+        (self.root / ".env").write_text("NGROK_EXE_PATH=tools/ngrok.exe\n")
+        cfg = Settings.load(self.root, environ={})
+        data = {
+            "tunnels": [
+                {
+                    "public_url": "https://auto.ngrok.app",
+                    "config": {"addr": "http://localhost:5000"},
+                }
+            ]
+        }
+        with patch("launcher.read_tunnels", side_effect=[None, data]), patch(
+            "launcher.subprocess.Popen", return_value=Mock(poll=lambda: None)
+        ) as popen, patch("launcher.shutil.which", return_value="other-ngrok"):
+            start_tunnel(cfg, self.root)
+        self.assertEqual(popen.call_args.args[0][0], str(binary))
 
 
 if __name__ == "__main__":

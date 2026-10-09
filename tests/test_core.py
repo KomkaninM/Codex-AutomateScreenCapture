@@ -72,6 +72,31 @@ class CoreTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.runtime.set_login("../escape.json")
 
+    def test_ngrok_domain_is_the_single_public_address_setting(self):
+        (self.root / ".env").write_text(
+            "NGROK_DOMAIN=bms.ngrok.app\nPUBLIC_TUNNEL_URL=https://old.ngrok.app\n"
+        )
+        cfg = Settings.load(self.root, environ={})
+        self.assertEqual(cfg.public_tunnel_url, "https://bms.ngrok.app")
+        self.runtime.set_tunnel("https://new.ngrok.app")
+        self.assertEqual(self.runtime.snapshot().ngrok_domain, "new.ngrok.app")
+        self.assertEqual(
+            Settings.load(self.root, environ={}).public_tunnel_url,
+            "https://new.ngrok.app",
+        )
+        self.assertIn("NGROK_DOMAIN='new.ngrok.app'", (self.root / ".env").read_text())
+        self.assertIn(
+            "PUBLIC_TUNNEL_URL=https://old.ngrok.app", (self.root / ".env").read_text()
+        )
+
+    def test_image_links_default_to_no_expiry_and_zero_is_valid(self):
+        self.assertEqual(Settings.load(self.root, environ={}).image_ttl_seconds, 0)
+        (self.root / ".env").write_text("IMAGE_TTL_SECONDS=0\n")
+        self.assertEqual(Settings.load(self.root, environ={}).image_ttl_seconds, 0)
+        (self.root / ".env").write_text("IMAGE_TTL_SECONDS=-1\n")
+        with self.assertRaises(ValueError):
+            Settings.load(self.root, environ={})
+
     def test_macro_pastes_unicode_and_restores_clipboard(self):
         folder = self.root / "macros"
         folder.mkdir()

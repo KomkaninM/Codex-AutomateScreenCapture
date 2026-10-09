@@ -229,13 +229,26 @@ def start_tunnel(cfg, project):
             "An ngrok inspector is already running on port 4040 for a different tunnel. "
             "Configure it for this bot port/domain, or stop that agent yourself and try again."
         )
-    binary = shutil.which("ngrok")
-    if binary is None and (project / "ngrok.exe").is_file():
-        binary = str(project / "ngrok.exe")
+    configured_path = cfg.ngrok_exe_path.strip()
+    if configured_path:
+        executable = Path(os.path.expandvars(configured_path)).expanduser()
+        if not executable.is_absolute():
+            executable = project / executable
+        if not executable.is_file():
+            raise RuntimeError(
+                "NGROK_EXE_PATH does not point to a file. Enter the full path to ngrok.exe "
+                "in .env using single quotes, then launch again."
+            )
+        binary = str(executable.resolve())
+    else:
+        binary = shutil.which("ngrok")
+        if binary is None and (project / "ngrok.exe").is_file():
+            binary = str(project / "ngrok.exe")
     if binary is None:
         raise RuntimeError(
             "Install the official ngrok CLI from https://ngrok.com/download. "
-            "Add it to PATH or put ngrok.exe beside start_bot.bat, then launch again."
+            "Set NGROK_EXE_PATH in .env, add it to PATH, or put ngrok.exe beside "
+            "start_bot.bat, then launch again."
         )
     from dotenv import dotenv_values
 
@@ -338,7 +351,8 @@ def run_application(project):
             "Starting the bot. Keep this window open; Ctrl+C stops it and the ngrok process this launcher started.\n"
         )
         server_environment = os.environ.copy()
-        server_environment["PUBLIC_TUNNEL_URL"] = url
+        server_environment["NGROK_DOMAIN"] = urlsplit(url).hostname
+        server_environment.pop("PUBLIC_TUNNEL_URL", None)
         server = subprocess.Popen(
             [sys.executable, str(project / "server.py")],
             cwd=project,

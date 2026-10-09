@@ -3,12 +3,14 @@ import hashlib
 import hmac
 import io
 import json
+import os
 import tempfile
 import time
 import unittest
 from concurrent.futures import Future
 from contextlib import redirect_stdout
 from datetime import datetime, timedelta
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -116,12 +118,11 @@ class IntegrationTests(unittest.TestCase):
         bot.line.reply.assert_not_called()
         bot.line.push.assert_not_called()
 
-    def test_interactive_login_macro_and_close_menu_use_replies(self):
+    def test_interactive_login_and_macro_use_replies(self):
         bot = self.make_bot()
         for command in (
             "login",
             "macro custom.json",
-            "close-menu",
             "check-id",
             "check-quota",
         ):
@@ -130,6 +131,38 @@ class IntegrationTests(unittest.TestCase):
                 bot.handle(self.event(command), time.monotonic())
                 bot.line.reply.assert_called_once()
         bot.line.push.assert_not_called()
+
+    def test_close_menu_command_is_removed_and_does_not_run_a_macro(self):
+        bot = self.make_bot()
+        bot.handle(self.event("close-menu"), time.monotonic())
+        bot.workflow.player.play.assert_not_called()
+        bot.line.reply.assert_not_called()
+        bot.line.push.assert_not_called()
+        bot.handle(self.event("help"), time.monotonic())
+        self.assertNotIn("close-menu", bot.line.reply.call_args.args[1][0]["text"])
+
+    def test_archival_files_remain_and_public_image_expiry_can_be_disabled(self):
+        bot = self.make_bot()
+        bot.handle(self.event("capture 07C"), time.monotonic())
+        route = bot.line.reply.call_args.args[1][0]["originalContentUrl"].removeprefix(
+            "https://bms.ngrok.app"
+        )
+        path = self.root / "screenshots" / route.removeprefix("/images/")
+        old = time.time() - 365 * 86400
+        os.utime(path, (old, old))
+        for ttl, status in ((0, 200), (604800, 404)):
+            with self.subTest(ttl=ttl):
+                runtime = RuntimeConfig(
+                    replace(self.runtime.snapshot(), image_ttl_seconds=ttl)
+                )
+                app = create_app(runtime, bot=bot, dispatcher=self.worker)
+                with app.test_client() as client:
+                    with client.get(route) as response:
+                        self.assertEqual(response.status_code, status)
+                self.assertTrue(path.is_file())
+                self.assertTrue(
+                    path.with_name(path.name.replace("_line.jpg", ".jpg")).is_file()
+                )
 
     def test_scheduled_capture_only_pushes_and_cancelled_job_does_nothing(self):
         bot = self.make_bot()

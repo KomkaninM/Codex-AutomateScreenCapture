@@ -16,7 +16,7 @@ log = logging.getLogger(__name__)
 HELP = (
     "Commands: capture [target] [note] [--starttime HH:MM[:SS]], "
     "start-capture 30m [note] [--starttime HH:MM[:SS]], stop-capture, "
-    "set-login macro.json, login, macro name.json, close-menu, "
+    "set-login macro.json, login, macro name.json, "
     "enable-autologout, disable-autologout, check-id, check-quota"
 )
 
@@ -46,7 +46,6 @@ def parse_command(text, targets):
         "set-login",
         "login",
         "macro",
-        "close-menu",
         "enable-autologout",
         "disable-autologout",
         "check-id",
@@ -183,16 +182,12 @@ class Bot:
             elif command.name == "login":
                 self.workflow.prepare(deadline=deadline)
                 messages = [self.line.text("BMS session is logged in.")]
-            elif command.name in ("macro", "close-menu"):
-                self.workflow.macro(
-                    command.macro or cfg.close_menu_macro, deadline=deadline
-                )
+            elif command.name == "macro":
+                self.workflow.macro(command.macro, deadline=deadline)
                 messages = [self.line.text("Macro completed.")]
             elif command.name in ("capture", "start-capture"):
                 if not cfg.public_tunnel_url:
-                    raise ValueError(
-                        "Configure PUBLIC_TUNNEL_URL or NGROK_DOMAIN before capture."
-                    )
+                    raise ValueError("Configure NGROK_DOMAIN before capture.")
                 if command.starttime or command.name == "start-capture":
                     now = datetime.now(ZoneInfo(cfg.timezone))
                     due = (
