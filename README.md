@@ -33,6 +33,8 @@ Ngrok output is captured in the launcher window and saved to `.runtime/ngrok.log
 
 Keep the launcher window open while using the bot. Press Ctrl+C to stop; it allows the bot to finish its active transaction and stops only the ngrok process it started. An already-running matching ngrok tunnel is reused and left running. If another ngrok agent uses port 4040 for a different port/domain, the launcher asks you to configure or stop it yourself. A private `.env` change takes effect on the next launch. `start_bot.bat` and the launcher flow require final validation on an actual Windows PC; automated tests on Linux exercise the helper behavior with process adapters.
 
+After the HTTP server binds successfully, the bot sends one **“🟢 BMS Automation Bot is online”** notification in the background to `GROUP_ID`, or `USER_ID` when the group is blank. Each launch uses a quota-counting push; group delivery scales with recipient reach. With both IDs blank, the notification is skipped. A notification failure is logged and does not stop the bot.
+
 ### Manual setup
 
 From the repository directory on Windows:

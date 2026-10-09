@@ -279,6 +279,31 @@ def create_app(runtime=None, *, bot=None, dispatcher=None):
     return app
 
 
+def send_online_notification(cfg, line):
+    """One logical push per startup; notification failures do not stop ingress."""
+    if not cfg.delivery_id:
+        log.info("Online notification skipped: configure GROUP_ID or USER_ID.")
+        return
+    try:
+        line.push(
+            cfg.delivery_id,
+            [
+                line.text(
+                    "🟢 BMS Automation Bot is online.\nSend capture to take a screenshot, or help to see commands."
+                )
+            ],
+        )
+        log.info(
+            "LINE accepted the startup online notification (%s mode).",
+            cfg.delivery_kind,
+        )
+    except Exception as exc:
+        log.warning(
+            "Startup online notification failed (%s); the bot is still running.",
+            type(exc).__name__,
+        )
+
+
 def startup_banner(cfg, line):
     border = "=" * 70
     print(
@@ -400,6 +425,7 @@ def main():
         try:
             startup_banner(cfg, bot.line)
             bot.scheduler.start()
+            dispatcher.submit(lambda: send_online_notification(cfg, bot.line))
             http.run()
         except KeyboardInterrupt:
             log.info("Stopping scheduler and draining desktop transactions.")
