@@ -4,6 +4,8 @@ from enum import Enum
 import time
 from pathlib import Path
 
+from automation_errors import AutomationError
+
 
 class SessionState(Enum):
     LOGGED_IN = "logged_in"
@@ -19,7 +21,7 @@ class VisualDetector:
 
     def state(self) -> SessionState:
         if not self.logged_out.is_file():
-            raise RuntimeError(
+            raise AutomationError(
                 "Configure assets/login_anchor.png before desktop automation."
             )
         from PIL import Image
@@ -51,7 +53,7 @@ class SessionGuard:
     def ensure(self, default_macro, target_macro=None, *, deadline=None, cancel=None):
         state = self.detector.state()
         if state == SessionState.UNKNOWN:
-            raise RuntimeError(
+            raise AutomationError(
                 "BMS session state is unknown; check desktop and reference images."
             )
         if state == SessionState.LOGGED_IN:
@@ -73,7 +75,7 @@ class SessionGuard:
             if self.detector.state() == SessionState.LOGGED_IN:
                 return bool(target_macro)
             if time.monotonic() >= stop_at:
-                raise RuntimeError(
+                raise AutomationError(
                     "Login macro completed but the login-page anchor is still visible or the screen cannot be verified."
                 )
             self.player._wait(
@@ -84,6 +86,6 @@ class SessionGuard:
 
     def verify_logout(self):
         if self.detector.state() != SessionState.LOGGED_OUT:
-            raise RuntimeError(
+            raise AutomationError(
                 "Logout macro completed but the login-page anchor was not detected."
             )

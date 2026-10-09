@@ -97,6 +97,12 @@ All interactive commands use `replyToken`, including `login` and `macro`, follow
 
 Closing a menu collapses a navigation panel; logout ends the BMS session. There is no `close-menu` command or required close-menu macro. `ENABLE_AUTO_LOGOUT=True` runs `LOGOUT_MACRO_SCRIPT` after capture and confirms that `assets/login_anchor.png` appears again; leave it `False` if you want the BMS session to stay open. No `logout_anchor.png` is needed.
 
+### When capture fails
+
+Desktop setup/session checks report their specific reason in LINE and the launcher console. For a missing anchor, save a distinctive login-page crop as `assets/login_anchor.png`. For a scaling failure, open Windows Settings → System → Display and set Scale to **100%**. For a resolution mismatch, match the display, `.env` (`DESKTOP_WIDTH=3000`, `DESKTOP_HEIGHT=2000`), and recorded macro metadata. For a login verification failure, watch the macro on the login page and check its timing and anchor crop. Restart after changing `.env` or display settings.
+
+Unexpected failures still receive a generic LINE response; the console records the exception type and Python function/line locations. Copy that log line for diagnosis. Exception contents, macro text, and local variables are excluded from those diagnostics.
+
 LINE exposes group **member count**, not each member's block status. The dashboard labels membership as an upper bound instead of inventing an unblocked target reach. The wrapper also supports daily follower insights and eligible-account follower ID enumeration; follower reach is not interchangeable with group reach. Metrics unavailable for the account or group are displayed as unavailable, and an unlimited quota is displayed explicitly.
 
 ## Record, convert, and play macros

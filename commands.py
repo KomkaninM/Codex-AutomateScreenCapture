@@ -5,10 +5,13 @@ from __future__ import annotations
 import logging
 import shlex
 import time
+import traceback
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from automation_errors import AutomationError
 from config import macro_name
 from scheduler import parse_interval, ScheduleCancelled
 
@@ -230,8 +233,19 @@ class Bot:
                     "Invalid command or missing macro/configuration. Use help and check the host setup."
                 )
             ]
+        except AutomationError as exc:
+            log.error("Command workflow failed: %s: %s", type(exc).__name__, exc)
+            messages = [self.line.text(f"Automation failed: {exc}")]
         except Exception as exc:
-            log.error("Command workflow failed: %s", type(exc).__name__)
+            # Frame locations help debugging without printing exception contents,
+            # source lines, or locals that may contain credentials or macro text.
+            locations = " -> ".join(
+                f"{Path(frame.filename).name}:{frame.lineno} ({frame.name})"
+                for frame in traceback.extract_tb(exc.__traceback__)[-8:]
+            )
+            log.error(
+                "Command workflow failed: %s at %s", type(exc).__name__, locations
+            )
             messages = [
                 self.line.text(
                     "Automation failed. Check the host logs, BMS session, and desktop configuration."

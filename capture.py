@@ -7,6 +7,7 @@ import re
 import secrets
 from PIL import Image
 
+from automation_errors import AutomationError
 from macro_player import enable_dpi_awareness
 
 
@@ -17,7 +18,7 @@ def primary_screen():
     with mss.mss() as display:
         monitors = display.monitors[1:]
         if not monitors:
-            raise RuntimeError("No active desktop monitor is available.")
+            raise AutomationError("No active desktop monitor is available.")
         primary = next(
             (m for m in monitors if m["left"] == 0 and m["top"] == 0), monitors[0]
         )
@@ -64,7 +65,7 @@ class CaptureEngine:
         ]
         image = self.grab().convert("RGB")
         if self.expected_size and image.size != self.expected_size:
-            raise RuntimeError(
+            raise AutomationError(
                 "Captured framebuffer resolution differs from configured coordinates."
             )
         try:
@@ -80,7 +81,7 @@ class CaptureEngine:
                 paths[2].stat().st_size > 10_000_000
                 or paths[3].stat().st_size > 1_000_000
             ):
-                raise RuntimeError("LINE image size limit exceeded.")
+                raise AutomationError("LINE image size limit exceeded.")
         except BaseException:
             for path in paths:
                 path.unlink(missing_ok=True)

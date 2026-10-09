@@ -119,6 +119,34 @@ class IntegrationTests(unittest.TestCase):
         bot.line.reply.assert_not_called()
         bot.line.push.assert_not_called()
 
+    def test_missing_anchor_capture_reports_the_actionable_reason(self):
+        bot = self.make_bot(
+            detector=VisualDetector(self.root / "assets" / "login_anchor.png")
+        )
+        with self.assertLogs("commands", level="ERROR") as logs:
+            bot.handle(self.event(), time.monotonic())
+        self.assertIn("assets/login_anchor.png", "\n".join(logs.output))
+        self.assertIn(
+            "assets/login_anchor.png", bot.line.reply.call_args.args[1][0]["text"]
+        )
+        bot.workflow.player.play.assert_not_called()
+        bot.line.push.assert_not_called()
+
+    def test_unexpected_error_logs_location_without_exception_secrets(self):
+        bot = self.make_bot()
+        bot.workflow.capture_engine = Mock(
+            capture=Mock(side_effect=RuntimeError("private-password-do-not-log"))
+        )
+        with self.assertLogs("commands", level="ERROR") as logs:
+            bot.handle(self.event(), time.monotonic())
+        output = "\n".join(logs.output)
+        self.assertIn("workflow.py", output)
+        self.assertNotIn("private-password-do-not-log", output)
+        self.assertNotIn(
+            "private-password-do-not-log", bot.line.reply.call_args.args[1][0]["text"]
+        )
+        bot.line.push.assert_not_called()
+
     def test_interactive_login_and_macro_use_replies(self):
         bot = self.make_bot()
         for command in (

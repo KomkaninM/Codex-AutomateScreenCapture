@@ -5,6 +5,8 @@ import threading
 import time
 from pathlib import Path
 
+from automation_errors import AutomationError
+
 UI_LOCK = threading.RLock()
 log = logging.getLogger(__name__)
 
@@ -82,7 +84,7 @@ class Workflow:
                     session_validated = False
                     if state == SessionState.LOGGED_OUT and attempt == 0:
                         continue
-                    raise RuntimeError(
+                    raise AutomationError(
                         "Session was lost during navigation or became unknown."
                     )
                 return self.capture_engine.capture(
