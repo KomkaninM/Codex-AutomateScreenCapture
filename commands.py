@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from automation_errors import AutomationError
+from automation_errors import AutomationError, AutomationTimeoutError
 from config import macro_name
 from scheduler import parse_interval, ScheduleCancelled
 
@@ -123,9 +123,13 @@ class Bot:
             raise RuntimeError(
                 "Scheduled captures require GROUP_ID or USER_ID and a public HTTPS tunnel."
             )
-        shot = self.workflow.capture(target, cancel=cancel)
-        if not cancel.is_set():
+
+        def deliver(shot):
+            log.info("Sending scheduled image to LINE; waiting for acceptance.")
             self.line.push(cfg.delivery_id, self._image_messages(shot, note))
+            log.info("LINE accepted the scheduled image message.")
+
+        self.workflow.capture(target, cancel=cancel, deliver=deliver)
 
     def cancel_schedules(self):
         return self.scheduler.stop_all()
@@ -151,6 +155,7 @@ class Bot:
             schedule_generation = self.schedule_generation()
         cfg = self.runtime.snapshot()
         messages = None
+        reply_attempted = False
         try:
             command = parse_command(event["message"]["text"], self.workflow.targets)
             if command.name == "unknown":
@@ -219,8 +224,21 @@ class Bot:
                         )
                     ]
                 else:
-                    shot = self.workflow.capture(command.target, deadline=deadline)
-                    messages = self._image_messages(shot, command.note)
+
+                    def deliver(shot):
+                        nonlocal reply_attempted
+                        image_messages = self._image_messages(shot, command.note)
+                        self.workflow.check(deadline=deadline)
+                        reply_attempted = True
+                        log.info(
+                            "Sending interactive image to LINE; waiting for acceptance."
+                        )
+                        self.line.reply(token, image_messages)
+                        log.info("LINE accepted the interactive image message.")
+
+                    self.workflow.capture(
+                        command.target, deadline=deadline, deliver=deliver
+                    )
         except ScheduleCancelled:
             messages = [
                 self.line.text("Schedule request canceled by a later stop-capture.")
@@ -233,7 +251,7 @@ class Bot:
                     "Invalid command or missing macro/configuration. Use help and check the host setup."
                 )
             ]
-        except AutomationError as exc:
+        except (AutomationError, AutomationTimeoutError) as exc:
             log.error("Command workflow failed: %s: %s", type(exc).__name__, exc)
             messages = [self.line.text(f"Automation failed: {exc}")]
         except Exception as exc:
@@ -251,7 +269,7 @@ class Bot:
                     "Automation failed. Check the host logs, BMS session, and desktop configuration."
                 )
             ]
-        if messages and time.monotonic() < deadline:
+        if messages and not reply_attempted and time.monotonic() < deadline:
             try:
                 self.line.reply(token, messages)
             except Exception as exc:

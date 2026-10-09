@@ -5,7 +5,7 @@ import threading
 import time
 from pathlib import Path
 
-from automation_errors import AutomationError
+from automation_errors import AutomationError, AutomationTimeoutError
 
 UI_LOCK = threading.RLock()
 log = logging.getLogger(__name__)
@@ -24,7 +24,9 @@ class Workflow:
         if cancel is not None and cancel.is_set():
             raise RuntimeError("Job cancelled.")
         if deadline is not None and time.monotonic() >= deadline:
-            raise TimeoutError("Interactive reply deadline expired.")
+            raise AutomationTimeoutError(
+                "Interactive reply deadline expired before image delivery."
+            )
 
     def _acquire(self, deadline=None, cancel=None):
         while True:
@@ -51,7 +53,7 @@ class Workflow:
         finally:
             UI_LOCK.release()
 
-    def capture(self, target=None, *, deadline=None, cancel=None):
+    def capture(self, target=None, *, deadline=None, cancel=None, deliver=None):
         self._acquire(deadline, cancel)
         try:
             cfg = self.runtime.snapshot()
@@ -61,43 +63,45 @@ class Workflow:
                 for k, v in {"deadline": deadline, "cancel": cancel}.items()
                 if v is not None
             }
-            session_validated = False
-            try:
-                from detector import SessionState
+            from detector import SessionState
 
-                for attempt in range(2):
-                    used_target = self.guard.ensure(
-                        cfg.default_login_macro, macro, **options
-                    )
-                    session_validated = True
-                    if macro and not used_target:
-                        self.player.play(macro, **options)
-                    self.check(deadline, cancel)
-                    if cfg.settle_delay:
-                        stop_at = deadline or (time.monotonic() + cfg.settle_delay + 1)
-                        self.player._wait(cfg.settle_delay, stop_at, cancel)
-                    if not hasattr(self.guard, "detector"):
-                        break
-                    state = self.guard.detector.state()
-                    if state == SessionState.LOGGED_IN:
-                        break
-                    session_validated = False
-                    if state == SessionState.LOGGED_OUT and attempt == 0:
-                        continue
-                    raise AutomationError(
-                        "Session was lost during navigation or became unknown."
-                    )
-                return self.capture_engine.capture(
-                    target or Path(cfg.default_login_macro).stem
+            log.info("Capture started; validating the BMS session.")
+            for attempt in range(2):
+                used_target = self.guard.ensure(
+                    cfg.default_login_macro, macro, **options
                 )
-            finally:
-                if cfg.auto_logout and session_validated:
-                    # Cleanup is a UI transaction even after cancellation/deadline expiry.
+                if macro and not used_target:
+                    self.player.play(macro, **options)
+                self.check(deadline, cancel)
+                if cfg.settle_delay:
+                    stop_at = deadline or (time.monotonic() + cfg.settle_delay + 1)
+                    self.player._wait(cfg.settle_delay, stop_at, cancel)
+                if not hasattr(self.guard, "detector"):
+                    break
+                state = self.guard.detector.state()
+                if state == SessionState.LOGGED_IN:
+                    break
+                if state == SessionState.LOGGED_OUT and attempt == 0:
+                    continue
+                raise AutomationError(
+                    "Session was lost during navigation or became unknown."
+                )
+            shot = self.capture_engine.capture(
+                target or Path(cfg.default_login_macro).stem
+            )
+            if deliver is not None:
+                self.check(deadline, cancel)
+                # The delivery callback returns only after LINE accepts the request.
+                # Holding UI_LOCK prevents another transaction from racing logout.
+                deliver(shot)
+                if cfg.auto_logout:
+                    log.info("Image delivery confirmed; starting auto-logout.")
                     self.player.play(cfg.logout_macro)
                     if cfg.settle_delay:
                         time.sleep(cfg.settle_delay)
                     if hasattr(self.guard, "verify_logout"):
                         self.guard.verify_logout()
+            return shot
         finally:
             UI_LOCK.release()
 

@@ -119,6 +119,71 @@ class IntegrationTests(unittest.TestCase):
         bot.line.reply.assert_not_called()
         bot.line.push.assert_not_called()
 
+    def test_autologout_waits_for_interactive_and_scheduled_delivery_acknowledgement(
+        self,
+    ):
+        self.runtime = RuntimeConfig(replace(self.runtime.snapshot(), auto_logout=True))
+        for scheduled in (False, True):
+            with self.subTest(scheduled=scheduled):
+                bot = self.make_bot()
+                bot.workflow.guard.verify_logout = Mock()
+                sending = threading.Event()
+                acknowledged = threading.Event()
+                order = []
+
+                def send(*args):
+                    order.append("sending")
+                    sending.set()
+                    acknowledged.wait()
+                    order.append("accepted")
+                    return {}
+
+                bot.line.reply.side_effect = send
+                bot.line.push.side_effect = send
+                bot.workflow.player.play.side_effect = (
+                    lambda *args, **kwargs: order.append("logout")
+                )
+                if scheduled:
+                    run = lambda: bot._scheduled(None, "", threading.Event())
+                else:
+                    run = lambda: bot.handle(self.event(), time.monotonic())
+                worker = threading.Thread(target=run)
+                worker.start()
+                try:
+                    self.assertTrue(sending.wait(2))
+                    bot.workflow.player.play.assert_not_called()
+                finally:
+                    acknowledged.set()
+                    worker.join(2)
+                self.assertFalse(worker.is_alive())
+                self.assertEqual(order, ["sending", "accepted", "logout"])
+                if scheduled:
+                    bot.line.reply.assert_not_called()
+                else:
+                    bot.line.reply.assert_called_once()
+                    bot.line.push.assert_not_called()
+
+    def test_failed_image_reply_leaves_session_open_without_retry_or_push(self):
+        self.runtime = RuntimeConfig(replace(self.runtime.snapshot(), auto_logout=True))
+        bot = self.make_bot()
+        bot.workflow.guard.verify_logout = Mock()
+        bot.line.reply.side_effect = LineAPIError("delivery not confirmed")
+        with self.assertLogs("commands", level="ERROR"):
+            bot.handle(self.event(), time.monotonic())
+        bot.workflow.player.play.assert_not_called()
+        bot.line.reply.assert_called_once()
+        bot.line.push.assert_not_called()
+
+    def test_logout_failure_after_delivery_does_not_send_a_second_reply(self):
+        self.runtime = RuntimeConfig(replace(self.runtime.snapshot(), auto_logout=True))
+        bot = self.make_bot()
+        bot.workflow.player.play.side_effect = RuntimeError("logout failed")
+        with self.assertLogs("commands", level="ERROR"):
+            bot.handle(self.event(), time.monotonic())
+        self.assertEqual(bot.line.reply.call_args.args[1][0]["type"], "image")
+        bot.line.reply.assert_called_once()
+        bot.line.push.assert_not_called()
+
     def test_missing_anchor_capture_reports_the_actionable_reason(self):
         bot = self.make_bot(
             detector=VisualDetector(self.root / "assets" / "login_anchor.png")
@@ -442,6 +507,22 @@ class IntegrationTests(unittest.TestCase):
                 self.assertEqual(bot.line.reply.call_args.args[1][0]["type"], "image")
                 self.assertEqual(detector.state(), SessionState.LOGGED_OUT)
         bot.line.push.assert_not_called()
+
+    def test_image_api_waits_longer_for_acceptance_without_changing_text_requests(self):
+        transport = Mock()
+        transport.request.return_value = Mock(status_code=200, json=lambda: {})
+        api = LineAPI("token", session=transport)
+        image = LineAPI.image(
+            "https://bms.ngrok.app/a.jpg", "https://bms.ngrok.app/b.jpg"
+        )
+        for deliver in (
+            lambda: api.reply("reply", [image]),
+            lambda: api.push("group", [image]),
+        ):
+            deliver()
+            self.assertEqual(transport.request.call_args.kwargs["timeout"], (5, 30))
+        api.reply("reply", [LineAPI.text("status")])
+        self.assertEqual(transport.request.call_args.kwargs["timeout"], (3, 8))
 
     def test_api_quota_unlimited_and_reply_timeout_single_attempt(self):
         transport = Mock()

@@ -13,6 +13,7 @@ from pathlib import Path
 
 from config import BASE_DIR, Settings, macro_name
 from macro_player import MacroPlayer, enable_dpi_awareness
+from automation_errors import AutomationTimeoutError
 
 
 def convert_legacy(data):
@@ -208,7 +209,9 @@ def main(argv=None):
             print(
                 "Invalid JSON. Copy the complete old macro object or select a valid JSON file."
             )
-        elif isinstance(exc, (ValueError, RuntimeError, FileNotFoundError)):
+        elif isinstance(
+            exc, (ValueError, RuntimeError, FileNotFoundError, AutomationTimeoutError)
+        ):
             print("Macro tool: " + str(exc))
         else:
             print(

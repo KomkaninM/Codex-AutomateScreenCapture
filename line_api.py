@@ -18,6 +18,8 @@ class LineAPIError(RuntimeError):
 
 class LineAPI:
     BASE = "https://api.line.me/v2/bot"
+    IMAGE_TIMEOUT = (5, 30)
+    MAX_IMAGE_REQUEST_SECONDS = 3 * sum(IMAGE_TIMEOUT) + 0.75
 
     def __init__(self, token: str, *, session=None, timeout=(3, 8), sleep=time.sleep):
         self.token = token
@@ -25,7 +27,9 @@ class LineAPI:
         self.timeout = timeout
         self.sleep = sleep
 
-    def _request(self, method, path, *, payload=None, retry_key=None, params=None):
+    def _request(
+        self, method, path, *, payload=None, retry_key=None, params=None, timeout=None
+    ):
         if not self.token:
             raise LineAPIError("CHANNEL_ACCESS_TOKEN is not configured.")
         headers = {
@@ -45,7 +49,7 @@ class LineAPI:
                     headers=headers,
                     json=payload,
                     params=params,
-                    timeout=self.timeout,
+                    timeout=self.timeout if timeout is None else timeout,
                 )
             except requests.RequestException as exc:
                 if attempt + 1 < attempts:
@@ -100,20 +104,32 @@ class LineAPI:
     def reply(self, reply_token, messages):
         if not reply_token:
             raise ValueError("An interactive response requires a reply token.")
+        messages = self._messages(messages)
         return self._request(
             "POST",
             "/message/reply",
-            payload={"replyToken": reply_token, "messages": self._messages(messages)},
+            payload={"replyToken": reply_token, "messages": messages},
+            timeout=(
+                self.IMAGE_TIMEOUT
+                if any(m.get("type") == "image" for m in messages)
+                else self.timeout
+            ),
         )
 
     def push(self, recipient_id, messages):
         if not recipient_id:
             raise ValueError("Scheduled delivery requires GROUP_ID or USER_ID.")
+        messages = self._messages(messages)
         return self._request(
             "POST",
             "/message/push",
-            payload={"to": recipient_id, "messages": self._messages(messages)},
+            payload={"to": recipient_id, "messages": messages},
             retry_key=str(uuid.uuid4()),
+            timeout=(
+                self.IMAGE_TIMEOUT
+                if any(m.get("type") == "image" for m in messages)
+                else self.timeout
+            ),
         )
 
     def quota(self):

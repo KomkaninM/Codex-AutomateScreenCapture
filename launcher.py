@@ -410,6 +410,8 @@ def run_application(project):
         check=True,
     )
     cfg = prepare_configuration(project)
+    from line_api import LineAPI
+
     owned_ngrok = None
     server = None
     try:
@@ -439,7 +441,14 @@ def run_application(project):
         )
         if server is not None:
             try:
-                server.wait(timeout=45 + cfg.max_macro_seconds + cfg.settle_delay + 10)
+                server.wait(
+                    timeout=45
+                    + 2 * cfg.max_macro_seconds
+                    + cfg.login_wait_seconds
+                    + 4 * cfg.settle_delay
+                    + LineAPI.MAX_IMAGE_REQUEST_SECONDS
+                    + 10
+                )
             except subprocess.TimeoutExpired:
                 stop_owned_process(server)
         return 0

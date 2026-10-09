@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 import time
 from pathlib import Path
 
+from automation_errors import AutomationTimeoutError
 from config import macro_name
+
+log = logging.getLogger(__name__)
 
 
 def enable_dpi_awareness():
@@ -141,46 +145,93 @@ class MacroPlayer:
                 k not in allowed for k in keys
             ):
                 raise ValueError("Unknown keyboard key.")
-        stop_at = min(deadline or float("inf"), time.monotonic() + self.max_seconds)
-        for step in steps:
+        started = time.monotonic()
+        macro_deadline = started + self.max_seconds
+        stop_at = min(
+            deadline if deadline is not None else float("inf"), macro_deadline
+        )
+        limit = (
+            "LINE reply deadline"
+            if deadline is not None and deadline <= macro_deadline
+            else "MAX_MACRO_SECONDS"
+        )
+        remaining = stop_at - started
+        required_waits = sum(
+            step.get("delay", 0)
+            + (
+                step.get("seconds", 0)
+                if step.get("action", step.get("type")) == "sleep"
+                else 0
+            )
+            + (0.15 if step.get("action", step.get("type")) == "text" else 0)
+            for step in steps
+        )
+        if remaining <= required_waits:
+            raise AutomationTimeoutError(
+                f"Macro stopped before input: recorded waits need {required_waits:.2f}s, "
+                f"but {limit} leaves {max(0, remaining):.2f}s."
+            )
+        log.info(
+            "Macro started: %d steps; recorded waits %.2fs; %s leaves %.2fs.",
+            len(steps),
+            required_waits,
+            limit,
+            remaining,
+        )
+        try:
+            for index, step in enumerate(steps, 1):
+                self._check(stop_at, cancel)
+                self._play_step(step, stop_at, cancel)
             self._check(stop_at, cancel)
+        except AutomationTimeoutError as exc:
+            elapsed = time.monotonic() - started
             action = step.get("action", step.get("type"))
-            if action == "click":
-                gui.click(
-                    x=step["x"],
-                    y=step["y"],
-                    clicks=step.get("clicks", 1),
-                    button=step.get("button", "left"),
-                    interval=0.05,
-                )
-            elif action == "text":
-                previous = self.clipboard.paste()
-                try:
-                    self.clipboard.copy(step["text"])
-                    gui.hotkey("ctrl", "v")
-                    self._wait(0.15, stop_at, cancel)
-                finally:
-                    self.clipboard.copy(previous)
-            elif action == "hotkey":
-                gui.hotkey(*step["keys"])
-            elif action == "press":
-                gui.press(step["key"])
-            elif action == "sleep":
-                self._wait(step.get("seconds", 0), stop_at, cancel)
-            self._wait(step.get("delay", 0), stop_at, cancel)
-        self._check(stop_at, cancel)
+            raise AutomationTimeoutError(
+                f"Macro timed out at step {index}/{len(steps)} ({action}); "
+                f"elapsed {elapsed:.2f}s; {limit} allowed {max(0, remaining):.2f}s. {exc}"
+            ) from None
+        log.info("Macro completed in %.2fs.", time.monotonic() - started)
+
+    def _play_step(self, step, stop_at, cancel):
+        gui = self.gui
+        action = step.get("action", step.get("type"))
+        if action == "click":
+            gui.click(
+                x=step["x"],
+                y=step["y"],
+                clicks=step.get("clicks", 1),
+                button=step.get("button", "left"),
+                interval=0.05,
+            )
+        elif action == "text":
+            previous = self.clipboard.paste()
+            try:
+                self.clipboard.copy(step["text"])
+                gui.hotkey("ctrl", "v")
+                self._wait(0.15, stop_at, cancel)
+            finally:
+                self.clipboard.copy(previous)
+        elif action == "hotkey":
+            gui.hotkey(*step["keys"])
+        elif action == "press":
+            gui.press(step["key"])
+        elif action == "sleep":
+            self._wait(step.get("seconds", 0), stop_at, cancel)
+        self._wait(step.get("delay", 0), stop_at, cancel)
 
     @staticmethod
     def _check(deadline, cancel):
         if cancel is not None and cancel.is_set():
             raise RuntimeError("Job cancelled.")
         if time.monotonic() >= deadline:
-            raise TimeoutError("Macro deadline exceeded.")
+            raise AutomationTimeoutError("Macro time limit expired.")
 
     def _wait(self, seconds, deadline, cancel):
         self._check(deadline, cancel)
         if time.monotonic() + seconds >= deadline:
-            raise TimeoutError("Insufficient time for macro delay.")
+            raise AutomationTimeoutError(
+                f"Next delay needs {seconds:.2f}s; only {max(0, deadline - time.monotonic()):.2f}s remain."
+            )
         if cancel is not None:
             if cancel.wait(seconds):
                 raise RuntimeError("Job cancelled.")

@@ -139,6 +139,42 @@ class CoreTests(unittest.TestCase):
             MacroPlayer(folder, gui=gui).play("bad.json")
         gui.click.assert_not_called()
 
+    def test_macro_timeout_reports_step_and_macro_limit_without_text(self):
+        folder = self.root / "macros"
+        folder.mkdir()
+        (folder / "a.json").write_text(
+            json.dumps(
+                {"steps": [{"action": "text", "text": "private-input", "delay": 0.5}]}
+            )
+        )
+        clock = [0.0]
+        gui = Mock()
+        gui.hotkey.side_effect = lambda *keys: clock.__setitem__(0, 0.8)
+        player = MacroPlayer(folder, gui=gui, clipboard=Mock(), max_seconds=1)
+        player.sleep = lambda seconds: clock.__setitem__(0, clock[0] + seconds)
+        with patch("macro_player.time.monotonic", side_effect=lambda: clock[0]):
+            with self.assertRaises(TimeoutError) as caught:
+                player.play("a.json")
+        message = str(caught.exception)
+        self.assertIn("step 1", message)
+        self.assertIn("MAX_MACRO_SECONDS", message)
+        self.assertIn("elapsed", message)
+        self.assertNotIn("private-input", message)
+
+    def test_macro_does_not_start_when_remaining_reply_time_cannot_fit_waits(self):
+        folder = self.root / "macros"
+        folder.mkdir()
+        (folder / "a.json").write_text(
+            json.dumps({"steps": [{"action": "click", "x": 10, "y": 20, "delay": 1}]})
+        )
+        gui = Mock()
+        with patch("macro_player.time.monotonic", return_value=0):
+            with self.assertRaises(TimeoutError) as caught:
+                MacroPlayer(folder, gui=gui).play("a.json", deadline=0.5)
+        self.assertIn("LINE reply deadline", str(caught.exception))
+        self.assertIn("before input", str(caught.exception))
+        gui.click.assert_not_called()
+
     def test_windows_dpi_awareness_does_not_require_specific_scaling(self):
         win_api = Mock()
         win_api.user32.GetDpiForSystem.return_value = 144
@@ -181,7 +217,7 @@ class CoreTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             guard.ensure("login.json")
 
-    def test_workflow_serializes_and_autologout_on_capture_failure(self):
+    def test_workflow_serializes_and_leaves_session_open_on_capture_failure(self):
         active = []
         overlaps = []
 
@@ -211,7 +247,7 @@ class CoreTests(unittest.TestCase):
         )
         with self.assertRaises(RuntimeError):
             wf.capture()
-        player.play.assert_called_with("logout.json")
+        player.play.assert_not_called()
 
     def test_command_parser_schedule_and_target_note(self):
         cmd = parse_command(
