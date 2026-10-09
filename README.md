@@ -4,6 +4,20 @@ A desktop BMS bridge with signed LINE webhooks, serialized automation, screensho
 
 ## Install and configure
 
+### One-click Windows launcher
+
+Extract the complete downloaded ZIP into a normal folder, then double-click **`start_bot.bat`**. Install standard Windows x64 Python 3.14 (or 3.12) and the official ngrok CLI once beforehand. Put ngrok on PATH, or place `ngrok.exe` beside the launcher. No administrator privileges or PowerShell execution-policy changes are needed.
+
+The launcher creates its own `.venv-launcher`, installs the pinned packages using prebuilt native dependencies, checks the installation, runs the full test suite, starts/reuses ngrok, saves the detected HTTPS tunnel URL, and starts `server.py`. Later launches reuse installed dependencies unless `requirements.txt` changes or the package check fails. The console stays open to show status and errors. A launcher lock prevents two double-clicks from running setup concurrently.
+
+On the first launch it copies `.env.example` to `.env` only if `.env` does not already exist, opens Notepad, and waits for you to save your LINE credentials and ngrok settings. Use `NGROK_AUTHTOKEN` in your private `.env` or ngrok's existing authenticated configuration. The launcher passes authentication through the ngrok process environment, not command-line arguments. Existing settings, operator macros, reference images, and screenshots are preserved. Missing BMS files are listed; the server can still start for `check-id` setup, while capture remains blocked until the recorded files are supplied.
+
+The launcher prints the exact webhook URL to enter in LINE Developers. You must enable Use webhook and Webhook redelivery there and invite the bot to your group; it does not change LINE account settings automatically. With a blank `GROUP_ID`, send `check-id`, put the returned group ID into `.env`, then relaunch. Keep the BMS desktop at 100% scaling, awake, and unlocked, and record your BMS macros/reference images as described below.
+
+Keep the launcher window open while using the bot. Press Ctrl+C to stop; it allows the bot to finish its active transaction and stops only the ngrok process it started. An already-running matching ngrok tunnel is reused and left running. If another ngrok agent uses port 4040 for a different port/domain, the launcher asks you to configure or stop it yourself. A private `.env` change takes effect on the next launch. `start_bot.bat` and the launcher flow require final validation on an actual Windows PC; automated tests on Linux exercise the helper behavior with process adapters.
+
+### Manual setup
+
 From the repository directory on Windows:
 
 ```powershell
