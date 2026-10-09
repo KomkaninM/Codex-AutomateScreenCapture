@@ -2,6 +2,7 @@ import base64
 import hashlib
 import hmac
 import json
+import sqlite3
 import tempfile
 import threading
 import time
@@ -16,6 +17,7 @@ from config import Settings, RuntimeConfig
 from macro_player import MacroPlayer, enable_dpi_awareness
 from capture import CaptureEngine
 from detector import SessionGuard, SessionState
+from event_ledger import EventLedger
 from scheduler import Scheduler, parse_interval
 from line_api import LineAPI
 from commands import parse_command
@@ -24,6 +26,21 @@ from server import create_app, Dispatcher
 
 
 class CoreTests(unittest.TestCase):
+    def test_webhook_database_connections_close_after_transactions(self):
+        with tempfile.TemporaryDirectory() as directory:
+            ledger = EventLedger(Path(directory) / ".runtime")
+            for fail in (False, True):
+                with self.subTest(failed_transaction=fail):
+                    try:
+                        with ledger._connect() as connection:
+                            connection.execute("SELECT 1")
+                            if fail:
+                                raise ValueError("transaction failed")
+                    except ValueError:
+                        pass
+                    with self.assertRaises(sqlite3.ProgrammingError):
+                        connection.execute("SELECT 1")
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)

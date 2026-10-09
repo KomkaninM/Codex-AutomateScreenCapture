@@ -3,6 +3,7 @@
 import sqlite3
 import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 
@@ -21,8 +22,14 @@ class EventLedger:
             )
             db.execute("CREATE INDEX IF NOT EXISTS events_received ON events(received)")
 
+    @contextmanager
     def _connect(self):
-        return sqlite3.connect(self.path, timeout=0.2)
+        connection = sqlite3.connect(self.path, timeout=0.2)
+        try:
+            with connection:
+                yield connection
+        finally:
+            connection.close()
 
     def claim(self, event_id):
         with self.lock, self._connect() as db:

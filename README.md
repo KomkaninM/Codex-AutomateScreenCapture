@@ -1,16 +1,19 @@
 # BMS Automation LINE Bot
 
-A desktop BMS bridge with signed LINE webhooks, serialized automation, screenshot archival, and scheduled group delivery. Python 3.11+ is required. Run one bot process in the logged-in Windows desktop session; this is not a Windows service that runs on the noninteractive service desktop.
+A desktop BMS bridge with signed LINE webhooks, serialized automation, screenshot archival, and scheduled group delivery. Python 3.11+ is required; the application tests cover Python 3.12 and 3.14. On Windows use the standard **64-bit x64 Python build** (not ARM64 or free-threaded Python). Run one bot process in the logged-in Windows desktop session; this is not a Windows service that runs on the noninteractive service desktop.
 
 ## Install and configure
 
 From the repository directory on Windows:
 
 ```powershell
-py -3.12 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+py -3.14 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install --upgrade pip
+.\.venv\Scripts\python.exe -m pip install --only-binary=numpy,opencv-python-headless,pillow -r requirements.txt
 Copy-Item .env.example .env
 ```
+
+Python 3.12 also works: substitute `py -3.12` when creating the environment. If the older download fails while compiling NumPy on Python 3.14, download the updated requirements, upgrade pip, and rerun the installation command above in your existing Python 3.14 environment. The binary-only option applies to the three native image dependencies; PyAutoGUI and its pure-Python helpers may still build wheels locally. No Visual Studio compiler is required for these native dependencies on Windows x64.
 
 Edit `.env` locally. Set `CHANNEL_ACCESS_TOKEN`, `LINE_CHANNEL_SECRET`, `GROUP_ID`, and `NGROK_DOMAIN` (hostname only) or `PUBLIC_TUNNEL_URL` (HTTPS origin). `USER_ID` is retained for compatibility; this bot delivers scheduled messages only to `GROUP_ID`. A blank group permits only `check-id` discovery from group chats; once the group is configured, events from other groups are ignored. Any member of the configured group can issue commands, including macros and configuration changes. Use a trusted operator group.
 
