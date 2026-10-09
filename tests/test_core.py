@@ -139,16 +139,15 @@ class CoreTests(unittest.TestCase):
             MacroPlayer(folder, gui=gui).play("bad.json")
         gui.click.assert_not_called()
 
-    def test_windows_scaling_must_be_one_hundred_percent(self):
+    def test_windows_dpi_awareness_does_not_require_specific_scaling(self):
         win_api = Mock()
         win_api.user32.GetDpiForSystem.return_value = 144
         with patch("sys.platform", "win32"), patch(
             "ctypes.windll", win_api, create=True
         ):
-            with self.assertRaisesRegex(RuntimeError, "100%"):
-                enable_dpi_awareness()
-            win_api.user32.GetDpiForSystem.return_value = 96
             enable_dpi_awareness()
+        win_api.user32.SetProcessDpiAwarenessContext.assert_called_once()
+        win_api.user32.GetDpiForSystem.assert_not_called()
 
     def test_capture_writes_real_dual_formats_and_line_jpeg(self):
         engine = CaptureEngine(

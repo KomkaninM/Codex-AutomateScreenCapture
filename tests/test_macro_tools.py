@@ -213,24 +213,23 @@ class MacroToolTests(unittest.TestCase):
         self.assertEqual(json.loads(path.read_text())["steps"], data["steps"])
         self.assertEqual([p.name for p in self.root.iterdir()], ["a.json"])
 
-    def test_recorded_desktop_size_is_checked_before_any_input(self):
+    def test_playback_uses_recorded_coordinates_without_display_size_checks(self):
         path = self.root / "a.json"
         path.write_text(
             json.dumps(
                 {
                     "desktop": {"width": 3000, "height": 2000},
-                    "steps": [{"action": "click", "x": 5, "y": 5}],
+                    "steps": [{"action": "click", "x": 1783, "y": 1255}],
                 }
             )
         )
         gui = Mock()
         gui.size.return_value = (1920, 1080)
-        with self.assertRaisesRegex(RuntimeError, "resolution"):
-            MacroPlayer(self.root, gui=gui).play("a.json")
-        gui.click.assert_not_called()
-        gui.size.return_value = (3000, 2000)
         MacroPlayer(self.root, gui=gui, sleep=lambda _: None).play("a.json")
-        gui.click.assert_called_once()
+        gui.click.assert_called_once_with(
+            x=1783, y=1255, clicks=1, button="left", interval=0.05
+        )
+        gui.size.assert_not_called()
 
     def test_malformed_desktop_metadata_is_rejected_before_input(self):
         (self.root / "a.json").write_text(

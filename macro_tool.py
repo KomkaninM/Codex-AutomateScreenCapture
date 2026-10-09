@@ -149,7 +149,7 @@ def run(args, cfg):
 
                 width, height = pyautogui.size()
                 print(
-                    f"Desktop: {width} × {height}. Use DESKTOP_WIDTH={width} and DESKTOP_HEIGHT={height} in .env."
+                    f"Recorded desktop: {width} × {height} (informational). Playback uses the recorded coordinates directly."
                 )
                 data = record_macro(
                     Path(name).stem, width, height, max_seconds=cfg.max_macro_seconds
@@ -157,7 +157,6 @@ def run(args, cfg):
             else:
                 player = MacroPlayer(
                     cfg.macros_dir,
-                    expected_size=(cfg.expected_width, cfg.expected_height),
                     max_seconds=cfg.max_macro_seconds,
                 )
                 player.load(name)

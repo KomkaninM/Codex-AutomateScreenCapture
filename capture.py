@@ -45,10 +45,9 @@ class Screenshot:
 
 
 class CaptureEngine:
-    def __init__(self, root: Path, *, grab=primary_screen, expected_size=None):
+    def __init__(self, root: Path, *, grab=primary_screen):
         self.root = Path(root).resolve()
         self.grab = grab
-        self.expected_size = expected_size
 
     def capture(self, partition: str):
         if not re.fullmatch(r"[A-Za-z0-9_-]+", partition):
@@ -64,10 +63,6 @@ class CaptureEngine:
             for suffix in (".jpg", "_line.webp", "_line.jpg", "_preview.jpg")
         ]
         image = self.grab().convert("RGB")
-        if self.expected_size and image.size != self.expected_size:
-            raise AutomationError(
-                "Captured framebuffer resolution differs from configured coordinates."
-            )
         try:
             image.save(paths[0], "JPEG", quality=100, subsampling=0, optimize=True)
             image.save(paths[1], "WEBP", quality=82, method=6)

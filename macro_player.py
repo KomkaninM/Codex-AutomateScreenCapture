@@ -7,7 +7,6 @@ import math
 import time
 from pathlib import Path
 
-from automation_errors import AutomationError
 from config import macro_name
 
 
@@ -19,10 +18,6 @@ def enable_dpi_awareness():
 
         # Per-monitor V2 keeps input coordinates and framebuffer pixels aligned.
         ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
-        if ctypes.windll.user32.GetDpiForSystem() != 96:
-            raise AutomationError(
-                "Windows primary display scaling must be 100% (96 DPI)."
-            )
 
 
 class MacroPlayer:
@@ -33,14 +28,12 @@ class MacroPlayer:
         gui=None,
         clipboard=None,
         sleep=time.sleep,
-        expected_size=None,
         max_seconds=35,
     ):
         self.directory = Path(directory)
         self._gui = gui
         self._clipboard = clipboard
         self.sleep = sleep
-        self.expected_size = expected_size
         self.max_seconds = max_seconds
 
     @property
@@ -136,21 +129,8 @@ class MacroPlayer:
         data = self._read(name)
         steps = self._validate(data)
         gui = self.gui
-        width, height = gui.size()
-        if isinstance(data, dict) and "desktop" in data:
-            desktop = data["desktop"]
-            if (width, height) != (desktop["width"], desktop["height"]):
-                raise AutomationError(
-                    "Desktop resolution does not match the macro recording resolution."
-                )
-        if self.expected_size and (width, height) != self.expected_size:
-            raise AutomationError(
-                "Desktop resolution does not match the macro recording resolution."
-            )
         for step in steps:
             action = step.get("action", step.get("type"))
-            if action == "click" and (step["x"] >= width or step["y"] >= height):
-                raise ValueError("Click lies outside the primary desktop.")
             keys = (
                 step.get("keys", [])
                 if action == "hotkey"

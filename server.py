@@ -91,7 +91,6 @@ def build_bot(runtime, dispatcher):
     cfg = runtime.snapshot()
     player = MacroPlayer(
         cfg.macros_dir,
-        expected_size=(cfg.expected_width, cfg.expected_height),
         max_seconds=cfg.max_macro_seconds,
     )
     detector = VisualDetector(cfg.logged_out_anchor, confidence=cfg.confidence)
@@ -105,9 +104,7 @@ def build_bot(runtime, dispatcher):
         runtime,
         player,
         guard,
-        CaptureEngine(
-            cfg.screenshots_dir, expected_size=(cfg.expected_width, cfg.expected_height)
-        ),
+        CaptureEngine(cfg.screenshots_dir),
         load_targets(cfg.project_dir / "targets.json"),
     )
     scheduler = Scheduler(dispatcher.submit)
