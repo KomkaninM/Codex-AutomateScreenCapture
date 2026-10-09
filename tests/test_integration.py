@@ -241,26 +241,72 @@ class IntegrationTests(unittest.TestCase):
             )
         bot.handle.assert_called_once()
 
-    def test_visual_detection_logged_in_logged_out_and_unknown(self):
+    def test_visual_detection_uses_only_the_login_page_anchor(self):
         assets = self.root / "assets"
         assets.mkdir()
         rng = np.random.default_rng(7)
-        in_image = Image.fromarray(rng.integers(0, 256, (8, 12, 3), dtype=np.uint8))
         out_image = Image.fromarray(rng.integers(0, 256, (8, 12, 3), dtype=np.uint8))
-        in_image.save(assets / "in.png")
-        out_image.save(assets / "out.png")
+        out_image.save(assets / "login_anchor.png")
         screen = Image.new("RGB", (100, 80), "black")
         detector = VisualDetector(
-            assets / "in.png", assets / "out.png", confidence=0.99, grab=lambda: screen
+            assets / "login_anchor.png", confidence=0.99, grab=lambda: screen
         )
-        self.assertEqual(detector.state(), SessionState.UNKNOWN)
-        screen.paste(in_image, (5, 5))
         self.assertEqual(detector.state(), SessionState.LOGGED_IN)
-        screen = Image.new("RGB", (100, 80), "black")
         screen.paste(out_image, (5, 5))
         self.assertEqual(detector.state(), SessionState.LOGGED_OUT)
-        screen.paste(in_image, (30, 30))
+        screen = Image.new("RGB", (100, 80), "black")
+        self.assertEqual(detector.state(), SessionState.LOGGED_IN)
+        screen = Image.new("RGB", (4, 4), "black")
         self.assertEqual(detector.state(), SessionState.UNKNOWN)
+
+    def test_missing_login_anchor_blocks_detection_instead_of_assuming_logged_in(self):
+        detector = VisualDetector(
+            self.root / "assets" / "login_anchor.png",
+            grab=lambda: Image.new("RGB", (100, 80)),
+        )
+        with self.assertRaisesRegex(RuntimeError, "login_anchor.png"):
+            detector.state()
+
+    def test_capture_recovers_and_confirms_logout_with_only_a_login_anchor(self):
+        assets = self.root / "assets"
+        assets.mkdir()
+        anchor = Image.fromarray(
+            np.random.default_rng(13).integers(0, 256, (8, 12, 3), dtype=np.uint8)
+        )
+        anchor.save(assets / "login_anchor.png")
+        login_screen = Image.new("RGB", (100, 80), "black")
+        login_screen.paste(anchor, (5, 5))
+        screen = login_screen.copy()
+        self.runtime = RuntimeConfig(replace(self.runtime.snapshot(), auto_logout=True))
+        detector = VisualDetector(
+            assets / "login_anchor.png", confidence=0.99, grab=lambda: screen
+        )
+        bot = self.make_bot(detector=detector)
+
+        def play(name, **options):
+            nonlocal screen
+            screen = (
+                login_screen.copy()
+                if name == "logout.json"
+                else Image.new("RGB", (100, 80), "black")
+            )
+
+        bot.workflow.player.play.side_effect = play
+        for command, login_macro in (
+            ("capture", "login_bms.json"),
+            ("capture 07C", "DH07C.json"),
+        ):
+            with self.subTest(command=command):
+                bot.workflow.player.play.reset_mock()
+                bot.line.reply.reset_mock()
+                bot.handle(self.event(command), time.monotonic())
+                self.assertEqual(
+                    [call.args[0] for call in bot.workflow.player.play.call_args_list],
+                    [login_macro, "logout.json"],
+                )
+                self.assertEqual(bot.line.reply.call_args.args[1][0]["type"], "image")
+                self.assertEqual(detector.state(), SessionState.LOGGED_OUT)
+        bot.line.push.assert_not_called()
 
     def test_api_quota_unlimited_and_reply_timeout_single_attempt(self):
         transport = Mock()

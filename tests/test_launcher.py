@@ -14,6 +14,7 @@ from launcher import (
     validate_interpreter,
     run_application,
     start_tunnel,
+    prepare_configuration,
 )
 
 
@@ -37,6 +38,28 @@ class LauncherTests(unittest.TestCase):
         (self.root / ".env").write_text("GROUP_ID=operator-group\n")
         self.assertFalse(ensure_env_file(self.root))
         self.assertEqual((self.root / ".env").read_text(), "GROUP_ID=operator-group\n")
+
+    def test_setup_requires_only_the_login_anchor(self):
+        (self.root / ".env").write_text(
+            "CHANNEL_ACCESS_TOKEN=private\nLINE_CHANNEL_SECRET=private\nGROUP_ID=group\n"
+        )
+        macros = self.root / "scripts" / "macros"
+        macros.mkdir(parents=True)
+        (macros / "login_bms.json").write_text("[]")
+        assets = self.root / "assets"
+        assets.mkdir()
+        (assets / "login_anchor.png").touch()
+        with patch("launcher.say") as say:
+            prepare_configuration(self.root)
+        self.assertNotIn(
+            "logout_anchor.png", " ".join(str(c.args) for c in say.call_args_list)
+        )
+        self.assertFalse(
+            any(
+                "Desktop capture is not configured" in c.args[0]
+                for c in say.call_args_list
+            )
+        )
 
     def test_install_is_cached_but_requirement_changes_trigger_refresh(self):
         runner = Mock(return_value=subprocess.CompletedProcess([], 0))

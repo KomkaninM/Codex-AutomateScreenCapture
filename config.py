@@ -78,8 +78,8 @@ class Settings:
     confidence: float = 0.8
     internal_api_token: str = ""
     timezone: str = "Asia/Bangkok"
-    expected_width: int = 1920
-    expected_height: int = 1080
+    expected_width: int = 3000
+    expected_height: int = 2000
     max_macro_seconds: float = 35.0
     image_ttl_seconds: int = 0
     login_wait_seconds: float = 5.0
@@ -91,10 +91,6 @@ class Settings:
     @property
     def screenshots_dir(self) -> Path:
         return self.project_dir / "screenshots"
-
-    @property
-    def logged_in_anchor(self) -> Path:
-        return self.project_dir / "assets" / "logout_anchor.png"
 
     @property
     def logged_out_anchor(self) -> Path:
@@ -139,8 +135,8 @@ class Settings:
             confidence=float(val("CONFIDENCE_THRESHOLD", "0.8")),
             internal_api_token=val("INTERNAL_API_TOKEN"),
             timezone=val("TIMEZONE", "Asia/Bangkok"),
-            expected_width=int(val("DESKTOP_WIDTH", "1920")),
-            expected_height=int(val("DESKTOP_HEIGHT", "1080")),
+            expected_width=int(val("DESKTOP_WIDTH", "3000")),
+            expected_height=int(val("DESKTOP_HEIGHT", "2000")),
             max_macro_seconds=float(val("MAX_MACRO_SECONDS", "35")),
             image_ttl_seconds=int(val("IMAGE_TTL_SECONDS", "0")),
             login_wait_seconds=float(val("LOGIN_WAIT_SECONDS", "5")),

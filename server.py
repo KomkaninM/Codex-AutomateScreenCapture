@@ -94,9 +94,7 @@ def build_bot(runtime, dispatcher):
         expected_size=(cfg.expected_width, cfg.expected_height),
         max_seconds=cfg.max_macro_seconds,
     )
-    detector = VisualDetector(
-        cfg.logged_in_anchor, cfg.logged_out_anchor, confidence=cfg.confidence
-    )
+    detector = VisualDetector(cfg.logged_out_anchor, confidence=cfg.confidence)
     guard = SessionGuard(
         detector,
         player,

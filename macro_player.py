@@ -58,13 +58,27 @@ class MacroPlayer:
             self._clipboard = pyperclip
         return self._clipboard
 
-    def load(self, name: str):
+    def _read(self, name: str):
         path = (self.directory / macro_name(name)).resolve()
         if path.parent != self.directory.resolve():
             raise ValueError("Macro path escapes the macro directory.")
         if path.stat().st_size > 1_000_000:
             raise ValueError("Macro exceeds 1 MB.")
-        data = json.loads(path.read_text(encoding="utf-8"))
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    def load(self, name: str):
+        return self._validate(self._read(name))
+
+    def _validate(self, data):
+        if isinstance(data, dict) and "desktop" in data:
+            desktop = data["desktop"]
+            if not isinstance(desktop, dict) or any(
+                type(desktop.get(k)) is not int or desktop[k] <= 0
+                for k in ("width", "height")
+            ):
+                raise ValueError(
+                    "Macro desktop metadata needs positive integer width and height."
+                )
         steps = data.get("steps") if isinstance(data, dict) else data
         if not isinstance(steps, list) or not 1 <= len(steps) <= 1000:
             raise ValueError("Macro must contain 1–1000 steps.")
@@ -116,9 +130,16 @@ class MacroPlayer:
         return steps
 
     def play(self, name: str, *, deadline=None, cancel=None):
-        steps = self.load(name)
+        data = self._read(name)
+        steps = self._validate(data)
         gui = self.gui
         width, height = gui.size()
+        if isinstance(data, dict) and "desktop" in data:
+            desktop = data["desktop"]
+            if (width, height) != (desktop["width"], desktop["height"]):
+                raise RuntimeError(
+                    "Desktop resolution does not match the macro recording resolution."
+                )
         if self.expected_size and (width, height) != self.expected_size:
             raise RuntimeError(
                 "Desktop resolution does not match the macro recording resolution."

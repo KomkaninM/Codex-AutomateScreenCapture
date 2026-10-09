@@ -135,7 +135,7 @@ def launcher_lock(project):
         handle.close()
 
 
-def bootstrap(project):
+def bootstrap(project, *, macro_tool=False):
     validate_interpreter(interpreter_info(sys.executable))
     python = project / ".venv-launcher" / "Scripts" / "python.exe"
     if not python.exists():
@@ -153,9 +153,12 @@ def bootstrap(project):
             "Rename that folder, then launch again. Your .env and BMS files are preserved."
         ) from None
     install_dependencies(project, python)
-    child = subprocess.Popen(
-        [str(python), str(project / "launcher.py"), "--run"], cwd=project
+    args = (
+        [str(python), str(project / "macro_tool.py")]
+        if macro_tool
+        else [str(python), str(project / "launcher.py"), "--run"]
     )
+    child = subprocess.Popen(args, cwd=project)
     try:
         return child.wait()
     except KeyboardInterrupt:
@@ -312,7 +315,6 @@ def prepare_configuration(project):
         )
     required = [
         cfg.macros_dir / cfg.default_login_macro,
-        cfg.logged_in_anchor,
         cfg.logged_out_anchor,
     ]
     if cfg.auto_logout:
@@ -384,7 +386,7 @@ def main():
         if "--run" in sys.argv:
             return run_application(ROOT)
         with launcher_lock(ROOT):
-            return bootstrap(ROOT)
+            return bootstrap(ROOT, macro_tool="--macro-tool" in sys.argv)
     except KeyboardInterrupt:
         say("\nLauncher canceled.")
         return 130

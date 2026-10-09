@@ -1,4 +1,4 @@
-"""Conservative visual login guard; ambiguous screens never imply a valid session."""
+"""Detect BMS session timeouts using the login-page anchor alone."""
 
 from enum import Enum
 import time
@@ -12,16 +12,15 @@ class SessionState(Enum):
 
 
 class VisualDetector:
-    def __init__(self, logged_in: Path, logged_out: Path, *, confidence=0.8, grab=None):
-        self.logged_in = Path(logged_in)
+    def __init__(self, logged_out: Path, *, confidence=0.8, grab=None):
         self.logged_out = Path(logged_out)
         self.confidence = confidence
         self.grab = grab
 
     def state(self) -> SessionState:
-        if not self.logged_in.is_file() or not self.logged_out.is_file():
+        if not self.logged_out.is_file():
             raise RuntimeError(
-                "Configure assets/logout_anchor.png and assets/login_anchor.png before desktop automation."
+                "Configure assets/login_anchor.png before desktop automation."
             )
         from PIL import Image
         from capture import primary_screen
@@ -29,21 +28,17 @@ class VisualDetector:
         import numpy as np
 
         screen = np.asarray((self.grab or primary_screen)().convert("RGB"))
-        matches = []
-        for path in (self.logged_in, self.logged_out):
-            with Image.open(path) as image:
-                anchor = np.asarray(image.convert("RGB"))
-            if anchor.shape[0] > screen.shape[0] or anchor.shape[1] > screen.shape[1]:
-                matches.append(False)
-                continue
-            # Normalized squared error works with uniform-color anchors too.
-            error = cv2.matchTemplate(screen, anchor, cv2.TM_SQDIFF_NORMED)
-            matches.append(float(error.min()) <= (1 - self.confidence))
-        if matches == [True, False]:
-            return SessionState.LOGGED_IN
-        if matches == [False, True]:
+        with Image.open(self.logged_out) as image:
+            anchor = np.asarray(image.convert("RGB"))
+        if anchor.shape[0] > screen.shape[0] or anchor.shape[1] > screen.shape[1]:
+            return SessionState.UNKNOWN
+        # Normalized squared error works with uniform-color anchors too.
+        error = cv2.matchTemplate(screen, anchor, cv2.TM_SQDIFF_NORMED)
+        if float(error.min()) <= (1 - self.confidence):
             return SessionState.LOGGED_OUT
-        return SessionState.UNKNOWN
+        # Single-anchor mode assumes the visible BMS session is active when
+        # its login-page control is absent. The desktop must stay on the BMS.
+        return SessionState.LOGGED_IN
 
 
 class SessionGuard:
@@ -79,7 +74,7 @@ class SessionGuard:
                 return bool(target_macro)
             if time.monotonic() >= stop_at:
                 raise RuntimeError(
-                    "Login macro completed but the logged-in reference was not detected."
+                    "Login macro completed but the login-page anchor is still visible or the screen cannot be verified."
                 )
             self.player._wait(
                 min(0.25, max(0.001, stop_at - time.monotonic() - 0.001)),
@@ -90,5 +85,5 @@ class SessionGuard:
     def verify_logout(self):
         if self.detector.state() != SessionState.LOGGED_OUT:
             raise RuntimeError(
-                "Logout macro completed but the logged-out reference was not detected."
+                "Logout macro completed but the login-page anchor was not detected."
             )

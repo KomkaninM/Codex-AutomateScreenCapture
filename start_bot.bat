@@ -16,22 +16,22 @@ if not errorlevel 1 goto use_default
 :use_python
 where python >nul 2>&1
 if errorlevel 1 goto missing_python
-python "%~dp0launcher.py"
+python "%~dp0launcher.py" %*
 set "BOT_EXIT=%ERRORLEVEL%"
 goto finished
 
 :use_314
-py -3.14 "%~dp0launcher.py"
+py -3.14 "%~dp0launcher.py" %*
 set "BOT_EXIT=%ERRORLEVEL%"
 goto finished
 
 :use_312
-py -3.12 "%~dp0launcher.py"
+py -3.12 "%~dp0launcher.py" %*
 set "BOT_EXIT=%ERRORLEVEL%"
 goto finished
 
 :use_default
-py -3 "%~dp0launcher.py"
+py -3 "%~dp0launcher.py" %*
 set "BOT_EXIT=%ERRORLEVEL%"
 goto finished
 
