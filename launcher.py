@@ -215,13 +215,20 @@ def read_tunnels():
 
 
 def stop_owned_process(process):
-    if process is not None and process.poll() is None:
-        process.terminate()
-        try:
-            process.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait(timeout=5)
+    if process is None:
+        return
+    try:
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=5)
+    finally:
+        diagnostics = vars(process).get("_bms_ngrok_diagnostics")
+        if diagnostics is not None:
+            diagnostics.join()
 
 
 def start_tunnel(cfg, project):
@@ -293,6 +300,7 @@ def start_tunnel(cfg, project):
         errors="replace",
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
+    process._bms_ngrok_diagnostics = diagnostics
     diagnostics.start(process.stdout)
     try:
         stop_at = time.monotonic() + 30

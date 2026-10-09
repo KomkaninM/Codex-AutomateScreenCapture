@@ -242,6 +242,7 @@ class LauncherTests(unittest.TestCase):
             "launcher.subprocess.Popen", return_value=process
         ) as popen, patch("launcher.shutil.which", return_value="other-ngrok"):
             url, owned = start_tunnel(cfg, self.root)
+            self.addCleanup(stop_owned_process, owned)
         self.assertEqual(url, "https://bms.ngrok.app")
         self.assertIs(owned, process)
         args = popen.call_args.args[0]
@@ -277,7 +278,8 @@ class LauncherTests(unittest.TestCase):
             "launcher.subprocess.Popen",
             return_value=Mock(poll=lambda: None, stdout=io.StringIO("")),
         ) as popen, patch("launcher.shutil.which", return_value="other-ngrok"):
-            start_tunnel(cfg, self.root)
+            _, owned = start_tunnel(cfg, self.root)
+            self.addCleanup(stop_owned_process, owned)
         self.assertEqual(popen.call_args.args[0][0], str(binary))
 
 

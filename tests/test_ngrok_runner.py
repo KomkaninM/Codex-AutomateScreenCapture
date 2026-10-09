@@ -3,6 +3,7 @@ import json
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
@@ -10,7 +11,7 @@ from unittest.mock import Mock, patch
 
 from config import Settings
 from ngrok_runner import NgrokDiagnostics, NgrokStartupError, prepare_auth_config
-from launcher import connect_tunnel, start_tunnel
+from launcher import connect_tunnel, start_tunnel, stop_owned_process
 
 
 class NgrokRunnerTests(unittest.TestCase):
@@ -92,6 +93,7 @@ class NgrokRunnerTests(unittest.TestCase):
             "launcher.subprocess.Popen", return_value=process
         ) as popen, redirect_stdout(io.StringIO()):
             url, owned = start_tunnel(self.cfg, self.root)
+            self.addCleanup(stop_owned_process, owned)
         args = popen.call_args.args[0]
         self.assertNotIn("sample-private-token", " ".join(args))
         self.assertIn("--config=" + str(self.root / ".runtime" / "ngrok.yml"), args)
@@ -99,6 +101,48 @@ class NgrokRunnerTests(unittest.TestCase):
         self.assertEqual(popen.call_args.kwargs["stderr"], subprocess.STDOUT)
         self.assertEqual(url, "https://bms.ngrok.app")
         self.assertIs(owned, process)
+
+    def test_owned_ngrok_cleanup_joins_log_reader_before_folder_cleanup(self):
+        entered = threading.Event()
+        release = threading.Event()
+
+        class DelayedOutput(io.StringIO):
+            def __iter__(self):
+                entered.set()
+                if not release.wait(2):
+                    raise RuntimeError("Test output was not released.")
+                return super().__iter__()
+
+        diagnostic = NgrokDiagnostics(self.root)
+        process = Mock(poll=lambda: None, stdout=DelayedOutput(""))
+        process.wait.side_effect = lambda **kwargs: release.set()
+        data = {
+            "tunnels": [
+                {
+                    "public_url": "https://bms.ngrok.app",
+                    "config": {"addr": "http://localhost:5000"},
+                }
+            ]
+        }
+        try:
+            with patch("launcher.read_tunnels", side_effect=[None, data]), patch(
+                "launcher.subprocess.Popen", return_value=process
+            ), patch(
+                "launcher.NgrokDiagnostics", return_value=diagnostic
+            ), patch.object(
+                diagnostic, "join", wraps=diagnostic.join
+            ) as joined, redirect_stdout(
+                io.StringIO()
+            ):
+                _, owned = start_tunnel(self.cfg, self.root)
+                self.assertTrue(entered.wait(2))
+                stop_owned_process(owned)
+                joined.assert_called_once()
+                self.assertFalse(diagnostic._thread.is_alive())
+                self.assertTrue(process.stdout.closed)
+        finally:
+            release.set()
+            diagnostic.join()
 
     def test_authentication_wizard_reloads_env_and_retries_once(self):
         (self.root / ".env").write_text("NGROK_DOMAIN=bms.ngrok.app\n")
