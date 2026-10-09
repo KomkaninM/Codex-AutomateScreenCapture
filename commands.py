@@ -193,7 +193,7 @@ class Bot:
                 messages = [self.line.text(f"Auto logout: {enabled}")]
             elif command.name == "login":
                 self.workflow.prepare(deadline=deadline)
-                messages = [self.line.text("BMS session is logged in.")]
+                messages = [self.line.text("Login check completed.")]
             elif command.name == "macro":
                 self.workflow.macro(command.macro, deadline=deadline)
                 messages = [self.line.text("Macro completed.")]

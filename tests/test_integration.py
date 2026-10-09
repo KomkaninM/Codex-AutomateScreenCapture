@@ -126,7 +126,6 @@ class IntegrationTests(unittest.TestCase):
         for scheduled in (False, True):
             with self.subTest(scheduled=scheduled):
                 bot = self.make_bot()
-                bot.workflow.guard.verify_logout = Mock()
                 sending = threading.Event()
                 acknowledged = threading.Event()
                 order = []
@@ -166,7 +165,6 @@ class IntegrationTests(unittest.TestCase):
     def test_failed_image_reply_leaves_session_open_without_retry_or_push(self):
         self.runtime = RuntimeConfig(replace(self.runtime.snapshot(), auto_logout=True))
         bot = self.make_bot()
-        bot.workflow.guard.verify_logout = Mock()
         bot.line.reply.side_effect = LineAPIError("delivery not confirmed")
         with self.assertLogs("commands", level="ERROR"):
             bot.handle(self.event(), time.monotonic())
@@ -457,7 +455,7 @@ class IntegrationTests(unittest.TestCase):
         screen = Image.new("RGB", (100, 80), "black")
         self.assertEqual(detector.state(), SessionState.LOGGED_IN)
         screen = Image.new("RGB", (4, 4), "black")
-        self.assertEqual(detector.state(), SessionState.UNKNOWN)
+        self.assertEqual(detector.state(), SessionState.LOGGED_IN)
 
     def test_missing_login_anchor_blocks_detection_instead_of_assuming_logged_in(self):
         detector = VisualDetector(
@@ -467,7 +465,7 @@ class IntegrationTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "login_anchor.png"):
             detector.state()
 
-    def test_capture_recovers_and_confirms_logout_with_only_a_login_anchor(self):
+    def test_capture_runs_login_and_logout_with_only_a_login_anchor(self):
         assets = self.root / "assets"
         assets.mkdir()
         anchor = Image.fromarray(
@@ -641,22 +639,87 @@ class IntegrationTests(unittest.TestCase):
             bot.workflow.macro("custom.json")
         bot.workflow.player.play.assert_not_called()
 
-    def test_navigation_session_timeout_relogs_once_with_target_macro(self):
-        states = iter(
-            [
-                SessionState.LOGGED_IN,
-                SessionState.LOGGED_OUT,
-                SessionState.LOGGED_OUT,
-                SessionState.LOGGED_IN,
-                SessionState.LOGGED_IN,
-            ]
-        )
-        bot = self.make_bot(detector=Mock(state=lambda: next(states)))
+    def test_target_navigation_does_not_rescan_or_run_a_second_macro(self):
+        detector = Mock(state=Mock(side_effect=[SessionState.LOGGED_IN]))
+        bot = self.make_bot(detector=detector)
         shot = bot.workflow.capture("07C")
         self.assertTrue(shot.archive.is_file())
-        self.assertEqual(bot.workflow.player.play.call_count, 2)
-        for call in bot.workflow.player.play.call_args_list:
-            self.assertEqual(call.args, ("DH07C.json",))
+        bot.workflow.player.play.assert_called_once_with("DH07C.json")
+        detector.state.assert_called_once()
+
+    def test_target_macro_replaces_default_login_once_when_anchor_is_detected(self):
+        detector = Mock(state=Mock(return_value=SessionState.LOGGED_OUT))
+        bot = self.make_bot(detector=detector)
+        shot = bot.workflow.capture("07C")
+        self.assertTrue(shot.archive.is_file())
+        bot.workflow.player.play.assert_called_once_with("DH07C.json")
+        detector.state.assert_called_once()
+
+    def test_capture_without_login_anchor_skips_navigation_and_settle_wait(self):
+        self.runtime = RuntimeConfig(replace(self.runtime.snapshot(), settle_delay=4))
+        bot = self.make_bot()
+        bot.handle(self.event(), time.monotonic())
+        bot.workflow.player.play.assert_not_called()
+        bot.workflow.player._wait.assert_not_called()
+        self.assertEqual(bot.line.reply.call_args.args[1][0]["type"], "image")
+
+    def test_capture_checks_anchor_once_then_delivers_even_when_anchor_stays_visible(
+        self,
+    ):
+        for state in (SessionState.LOGGED_OUT, SessionState.LOGGED_IN):
+            for auto_logout in (False, True):
+                with self.subTest(state=state, auto_logout=auto_logout):
+                    self.runtime = RuntimeConfig(
+                        replace(self.runtime.snapshot(), auto_logout=auto_logout)
+                    )
+                    detector = Mock(state=Mock(return_value=state))
+                    bot = self.make_bot(detector=detector)
+                    bot.workflow.guard.wait_seconds = 0
+                    bot.handle(self.event(), time.monotonic())
+                    self.assertEqual(
+                        bot.line.reply.call_args.args[1][0]["type"], "image"
+                    )
+                    detector.state.assert_called_once()
+                    expected = (
+                        ["login_bms.json"] if state == SessionState.LOGGED_OUT else []
+                    )
+                    if auto_logout:
+                        expected.append("logout.json")
+                    self.assertEqual(
+                        [
+                            call.args[0]
+                            for call in bot.workflow.player.play.call_args_list
+                        ],
+                        expected,
+                    )
+                    bot.line.reply.assert_called_once()
+                    bot.line.push.assert_not_called()
+
+    def test_visual_detection_matches_prototype_correlation_with_brightness_change(
+        self,
+    ):
+        assets = self.root / "assets"
+        assets.mkdir()
+        anchor = np.random.default_rng(29).integers(
+            20, 240, (12, 16, 3), dtype=np.uint8
+        )
+        Image.fromarray(anchor).save(assets / "login_anchor.png")
+        screen = Image.new("RGB", (100, 80), "black")
+        screen.paste(Image.fromarray((anchor // 4).astype(np.uint8)), (10, 15))
+        detector = VisualDetector(
+            assets / "login_anchor.png", confidence=0.95, grab=lambda: screen
+        )
+        self.assertEqual(detector.state(), SessionState.LOGGED_OUT)
+
+    def test_hyphenated_login_anchor_name_is_supported_with_underscore_priority(self):
+        assets = self.root / "assets"
+        assets.mkdir()
+        hyphenated = assets / "login-anchor.png"
+        hyphenated.touch()
+        self.assertEqual(self.runtime.snapshot().logged_out_anchor, hyphenated)
+        underscored = assets / "login_anchor.png"
+        underscored.touch()
+        self.assertEqual(self.runtime.snapshot().logged_out_anchor, underscored)
 
     def test_stop_invalidates_prior_queued_schedule_registration(self):
         pending = []

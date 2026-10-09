@@ -103,7 +103,11 @@ class Settings:
 
     @property
     def logged_out_anchor(self) -> Path:
-        return self.project_dir / "assets" / "login_anchor.png"
+        primary = self.project_dir / "assets" / "login_anchor.png"
+        alternative = self.project_dir / "assets" / "login-anchor.png"
+        return (
+            alternative if not primary.is_file() and alternative.is_file() else primary
+        )
 
     @classmethod
     def load(cls, project_dir: Path = BASE_DIR, environ=None) -> Settings:

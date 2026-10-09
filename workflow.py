@@ -5,7 +5,7 @@ import threading
 import time
 from pathlib import Path
 
-from automation_errors import AutomationError, AutomationTimeoutError
+from automation_errors import AutomationTimeoutError
 
 UI_LOCK = threading.RLock()
 log = logging.getLogger(__name__)
@@ -63,29 +63,15 @@ class Workflow:
                 for k, v in {"deadline": deadline, "cancel": cancel}.items()
                 if v is not None
             }
-            from detector import SessionState
-
-            log.info("Capture started; validating the BMS session.")
-            for attempt in range(2):
-                used_target = self.guard.ensure(
-                    cfg.default_login_macro, macro, **options
-                )
-                if macro and not used_target:
-                    self.player.play(macro, **options)
-                self.check(deadline, cancel)
-                if cfg.settle_delay:
-                    stop_at = deadline or (time.monotonic() + cfg.settle_delay + 1)
-                    self.player._wait(cfg.settle_delay, stop_at, cancel)
-                if not hasattr(self.guard, "detector"):
-                    break
-                state = self.guard.detector.state()
-                if state == SessionState.LOGGED_IN:
-                    break
-                if state == SessionState.LOGGED_OUT and attempt == 0:
-                    continue
-                raise AutomationError(
-                    "Session was lost during navigation or became unknown."
-                )
+            log.info("Capture started; checking the login anchor once.")
+            macro_played = self.guard.ensure(cfg.default_login_macro, macro, **options)
+            if macro and not macro_played:
+                self.player.play(macro, **options)
+                macro_played = True
+            self.check(deadline, cancel)
+            if macro_played and cfg.settle_delay:
+                stop_at = deadline or (time.monotonic() + cfg.settle_delay + 1)
+                self.player._wait(cfg.settle_delay, stop_at, cancel)
             shot = self.capture_engine.capture(
                 target or Path(cfg.default_login_macro).stem
             )
@@ -99,8 +85,7 @@ class Workflow:
                     self.player.play(cfg.logout_macro)
                     if cfg.settle_delay:
                         time.sleep(cfg.settle_delay)
-                    if hasattr(self.guard, "verify_logout"):
-                        self.guard.verify_logout()
+                    log.info("Auto-logout macro completed.")
             return shot
         finally:
             UI_LOCK.release()
