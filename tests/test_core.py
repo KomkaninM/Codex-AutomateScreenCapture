@@ -185,7 +185,7 @@ class CoreTests(unittest.TestCase):
         win_api.user32.SetProcessDpiAwarenessContext.assert_called_once()
         win_api.user32.GetDpiForSystem.assert_not_called()
 
-    def test_capture_writes_real_dual_formats_and_line_jpeg(self):
+    def test_capture_writes_real_dual_formats_and_webp_delivery(self):
         engine = CaptureEngine(
             self.root / "shots", grab=lambda: Image.new("RGB", (200, 100), "red")
         )
@@ -193,8 +193,8 @@ class CoreTests(unittest.TestCase):
         for name, fmt in [
             ("archive", "JPEG"),
             ("webp", "WEBP"),
-            ("original", "JPEG"),
-            ("preview", "JPEG"),
+            ("original", "WEBP"),
+            ("preview", "WEBP"),
         ]:
             path = getattr(shot, name)
             self.assertEqual(path.parent.name, "07C")

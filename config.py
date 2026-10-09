@@ -84,6 +84,7 @@ class Settings:
     max_macro_seconds: float = 35.0
     image_ttl_seconds: int = 0
     login_wait_seconds: float = 5.0
+    line_webp_quality: int = 90
 
     @property
     def delivery_id(self) -> str:
@@ -154,8 +155,11 @@ class Settings:
             max_macro_seconds=float(val("MAX_MACRO_SECONDS", "35")),
             image_ttl_seconds=int(val("IMAGE_TTL_SECONDS", "0")),
             login_wait_seconds=float(val("LOGIN_WAIT_SECONDS", "5")),
+            line_webp_quality=int(val("LINE_WEBP_QUALITY", "90")),
         )
         ZoneInfo(cfg.timezone)
+        if not 1 <= cfg.line_webp_quality <= 100:
+            raise ValueError("LINE_WEBP_QUALITY must be between 1 and 100.")
         if (
             not 1 <= cfg.port <= 65535
             or min(cfg.expected_width, cfg.expected_height) < 1

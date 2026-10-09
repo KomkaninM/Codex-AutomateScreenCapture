@@ -85,10 +85,10 @@ class LineAPI:
     @staticmethod
     def image(original, preview):
         if any(
-            not url.startswith("https://") or not url.endswith(".jpg")
+            not url.startswith("https://") or not url.endswith((".jpg", ".webp"))
             for url in (original, preview)
         ):
-            raise ValueError("LINE image URLs must be HTTPS JPEG URLs.")
+            raise ValueError("LINE image URLs must be HTTPS JPEG or WebP URLs.")
         return {
             "type": "image",
             "originalContentUrl": original,

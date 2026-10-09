@@ -34,6 +34,12 @@ class Command:
     macro: str | None = None
 
 
+@dataclass
+class ScheduleProgress:
+    # Updated inside the serialized capture delivery callback, after LINE acceptance.
+    delivered: int = 0
+
+
 def parse_command(text, targets):
     try:
         parts = shlex.split(text)
@@ -57,6 +63,10 @@ def parse_command(text, targets):
     }:
         return Command("unknown")
     if name in ("capture", "start-capture"):
+        parts = [
+            "--starttime" if part in ("—starttime", "–starttime") else part
+            for part in parts
+        ]
         start = None
         if "--starttime" in parts:
             i = parts.index("--starttime")
@@ -110,14 +120,24 @@ class Bot:
         self.line = line
         self.scheduler = scheduler
 
-    def _image_messages(self, shot, note=""):
-        urls = shot.urls(self.runtime.snapshot().public_tunnel_url)
-        messages = [self.line.image(*urls)]
+    def _image_messages(self, shot, note="", *, capture_number=None):
+        cfg = self.runtime.snapshot()
+        urls = shot.urls(cfg.public_tunnel_url)
+        captured_at = shot.captured_at.astimezone(ZoneInfo(cfg.timezone))
+        heading = (
+            f"Scheduled capture #{capture_number}"
+            if capture_number is not None
+            else "Capture"
+        )
+        caption = (
+            f"{heading}\nTimestamp: {captured_at:%Y-%m-%d %H:%M:%S} ({cfg.timezone})"
+        )
         if note:
-            messages.insert(0, self.line.text(note))
-        return messages
+            caption += f"\nNote: {note}"
+        return [self.line.text(caption), self.line.image(*urls)]
 
-    def _scheduled(self, target, note, cancel):
+    def _scheduled(self, target, note, cancel, progress=None):
+        progress = progress if progress is not None else ScheduleProgress()
         cfg = self.runtime.snapshot()
         if not cfg.public_tunnel_url or not cfg.delivery_id:
             raise RuntimeError(
@@ -126,7 +146,11 @@ class Bot:
 
         def deliver(shot):
             log.info("Sending scheduled image to LINE; waiting for acceptance.")
-            self.line.push(cfg.delivery_id, self._image_messages(shot, note))
+            self.line.push(
+                cfg.delivery_id,
+                self._image_messages(shot, note, capture_number=progress.delivered + 1),
+            )
+            progress.delivered += 1
             log.info("LINE accepted the scheduled image message.")
 
         self.workflow.capture(target, cancel=cancel, deliver=deliver)
@@ -207,11 +231,12 @@ class Bot:
                         if command.starttime
                         else now + timedelta(seconds=command.interval)
                     )
+                    progress = ScheduleProgress()
                     job_id = self.scheduler.add(
                         command.interval,
                         due,
                         lambda cancel: self._scheduled(
-                            command.target, command.note, cancel
+                            command.target, command.note, cancel, progress
                         ),
                         lambda cancel: self.workflow.prepare(
                             command.target, cancel=cancel

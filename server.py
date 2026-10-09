@@ -104,7 +104,11 @@ def build_bot(runtime, dispatcher):
         runtime,
         player,
         guard,
-        CaptureEngine(cfg.screenshots_dir),
+        CaptureEngine(
+            cfg.screenshots_dir,
+            timezone_name=cfg.timezone,
+            webp_quality=cfg.line_webp_quality,
+        ),
         load_targets(cfg.project_dir / "targets.json"),
     )
     scheduler = Scheduler(dispatcher.submit)
@@ -262,7 +266,7 @@ def create_app(runtime=None, *, bot=None, dispatcher=None):
         if not path.is_relative_to(root) or not path.is_file():
             abort(404)
         if not re.fullmatch(
-            r"shot_\d{8}_\d{6}_\d{3}_[a-f0-9]{32}_(?:line\.(?:jpg|webp)|preview\.jpg)",
+            r"shot_\d{8}_\d{6}_\d{3}_[a-f0-9]{32}_(?:line|preview)\.(?:jpg|webp)",
             path.name,
         ):
             abort(404)
@@ -271,7 +275,12 @@ def create_app(runtime=None, *, bot=None, dispatcher=None):
             and time.time() - path.stat().st_mtime > cfg.image_ttl_seconds
         ):
             abort(404)
-        response = send_file(path, conditional=True, max_age=3600)
+        response = send_file(
+            path,
+            mimetype="image/webp" if path.suffix == ".webp" else "image/jpeg",
+            conditional=True,
+            max_age=3600,
+        )
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "no-referrer"
         return response

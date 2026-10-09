@@ -10,10 +10,10 @@ import time
 import unittest
 from concurrent.futures import Future
 from contextlib import redirect_stdout
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from dataclasses import replace
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import numpy as np
 import requests
@@ -85,23 +85,33 @@ class IntegrationTests(unittest.TestCase):
             "source": {"type": "group", "groupId": "group", "userId": "user"},
         }
 
-    def test_capture_reply_urls_serve_real_jpeg_and_archives_stay_private(self):
+    def test_capture_reply_urls_serve_real_webp_and_archives_stay_private(self):
         bot = self.make_bot()
         bot.handle(self.event("capture 07C status"), time.monotonic())
         bot.line.push.assert_not_called()
         messages = bot.line.reply.call_args.args[1]
-        self.assertEqual(messages[0]["text"], "status")
+        self.assertIn("Note: status", messages[0]["text"])
+        self.assertIn("Timestamp:", messages[0]["text"])
         image = messages[1]
-        self.assertTrue(image["originalContentUrl"].endswith("_line.jpg"))
+        self.assertTrue(image["originalContentUrl"].endswith("_line.webp"))
+        self.assertTrue(image["previewImageUrl"].endswith("_preview.webp"))
         app = create_app(self.runtime, bot=bot, dispatcher=self.worker)
-        with app.test_client() as client:
+        with app.test_client() as client, patch(
+            "mimetypes.guess_type", return_value=(None, None)
+        ):
             route = image["originalContentUrl"].removeprefix("https://bms.ngrok.app")
             result = client.get(route)
             self.assertEqual(result.status_code, 200)
-            self.assertEqual(result.mimetype, "image/jpeg")
+            self.assertEqual(result.mimetype, "image/webp")
             with Image.open(io.BytesIO(result.data)) as saved:
                 self.assertEqual(saved.size, (300, 200))
-            archive_name = route.rsplit("/", 1)[1].replace("_line.jpg", ".jpg")
+                self.assertEqual(saved.format, "WEBP")
+            with client.get(
+                image["previewImageUrl"].removeprefix("https://bms.ngrok.app")
+            ) as preview:
+                self.assertEqual(preview.status_code, 200)
+                self.assertEqual(preview.mimetype, "image/webp")
+            archive_name = route.rsplit("/", 1)[1].replace("_line.webp", ".jpg")
             self.assertEqual(client.get("/images/07C/" + archive_name).status_code, 404)
             result.close()
 
@@ -178,7 +188,7 @@ class IntegrationTests(unittest.TestCase):
         bot.workflow.player.play.side_effect = RuntimeError("logout failed")
         with self.assertLogs("commands", level="ERROR"):
             bot.handle(self.event(), time.monotonic())
-        self.assertEqual(bot.line.reply.call_args.args[1][0]["type"], "image")
+        self.assertEqual(bot.line.reply.call_args.args[1][1]["type"], "image")
         bot.line.reply.assert_called_once()
         bot.line.push.assert_not_called()
 
@@ -236,7 +246,7 @@ class IntegrationTests(unittest.TestCase):
     def test_archival_files_remain_and_public_image_expiry_can_be_disabled(self):
         bot = self.make_bot()
         bot.handle(self.event("capture 07C"), time.monotonic())
-        route = bot.line.reply.call_args.args[1][0]["originalContentUrl"].removeprefix(
+        route = bot.line.reply.call_args.args[1][1]["originalContentUrl"].removeprefix(
             "https://bms.ngrok.app"
         )
         path = self.root / "screenshots" / route.removeprefix("/images/")
@@ -253,7 +263,7 @@ class IntegrationTests(unittest.TestCase):
                         self.assertEqual(response.status_code, status)
                 self.assertTrue(path.is_file())
                 self.assertTrue(
-                    path.with_name(path.name.replace("_line.jpg", ".jpg")).is_file()
+                    path.with_name(path.name.replace("_line.webp", ".jpg")).is_file()
                 )
 
     def test_scheduled_capture_only_pushes_and_cancelled_job_does_nothing(self):
@@ -276,6 +286,86 @@ class IntegrationTests(unittest.TestCase):
         self.assertIsNone(job.interval)
         self.assertEqual(job.due.hour, 15)
         self.assertEqual(job.due.minute, 30)
+
+    def test_capture_caption_uses_capture_instant_and_optional_note(self):
+        bot = self.make_bot()
+        instant = datetime(2026, 10, 10, 18, 34, 56, tzinfo=timezone.utc)
+        bot.workflow.capture_engine.clock = lambda: instant
+        for note in ("", "generator — daily report"):
+            with self.subTest(note=note):
+                bot.handle(self.event("capture " + note), time.monotonic())
+                messages = bot.line.reply.call_args.args[1]
+                self.assertEqual(len(messages), 2)
+                caption = messages[0]["text"]
+                self.assertTrue(caption.startswith("Capture\n"))
+                self.assertIn("Timestamp: 2026-10-11 01:34:56 (Asia/Bangkok)", caption)
+                self.assertEqual("Note:" in caption, bool(note))
+                if note:
+                    self.assertIn("Note: " + note, caption)
+                self.assertEqual(messages[1]["type"], "image")
+        bot.line.push.assert_not_called()
+
+    def test_schedule_counters_are_independent_and_reset_for_new_jobs(self):
+        bot = self.make_bot()
+        bot.handle(self.event("start-capture 30m generator"), time.monotonic())
+        bot.handle(self.event("start-capture 1h cooling"), time.monotonic())
+        first, second = list(bot.scheduler.jobs.values())
+        for job, number, note in (
+            (first, 1, "generator"),
+            (first, 2, "generator"),
+            (second, 1, "cooling"),
+            (first, 3, "generator"),
+        ):
+            job.capture(job.cancel)
+            caption = bot.line.push.call_args.args[1][0]["text"]
+            self.assertTrue(caption.startswith(f"Scheduled capture #{number}\n"))
+            self.assertIn("Note: " + note, caption)
+            self.assertIn("Timestamp:", caption)
+        bot.cancel_schedules()
+        bot.handle(self.event("start-capture 30m"), time.monotonic())
+        new_job = next(iter(bot.scheduler.jobs.values()))
+        new_job.capture(new_job.cancel)
+        self.assertTrue(
+            bot.line.push.call_args.args[1][0]["text"].startswith(
+                "Scheduled capture #1\n"
+            )
+        )
+
+    def test_schedule_counts_accepted_images_despite_logout_failure(self):
+        self.runtime = RuntimeConfig(replace(self.runtime.snapshot(), auto_logout=True))
+        bot = self.make_bot()
+        bot.handle(self.event("start-capture 30m"), time.monotonic())
+        job = next(iter(bot.scheduler.jobs.values()))
+        bot.line.push.side_effect = LineAPIError("not accepted")
+        with self.assertRaises(LineAPIError):
+            job.capture(job.cancel)
+        bot.workflow.player.play.assert_not_called()
+        bot.line.push.side_effect = None
+        bot.workflow.player.play.side_effect = RuntimeError("logout failed")
+        with self.assertRaises(RuntimeError):
+            job.capture(job.cancel)
+        self.assertIn(
+            "Scheduled capture #1\n", bot.line.push.call_args.args[1][0]["text"]
+        )
+        bot.workflow.player.play.side_effect = None
+        job.capture(job.cancel)
+        self.assertIn(
+            "Scheduled capture #2\n", bot.line.push.call_args.args[1][0]["text"]
+        )
+
+    def test_iphone_one_time_schedule_sends_numbered_caption(self):
+        bot = self.make_bot()
+        bot.handle(
+            self.event("capture generator —starttime 15:30:00"), time.monotonic()
+        )
+        job = next(iter(bot.scheduler.jobs.values()))
+        self.assertEqual((job.due.hour, job.due.minute, job.due.second), (15, 30, 0))
+        self.assertIsNone(job.interval)
+        job.capture(job.cancel)
+        self.assertIn(
+            "Scheduled capture #1\n", bot.line.push.call_args.args[1][0]["text"]
+        )
+        self.assertIn("Note: generator", bot.line.push.call_args.args[1][0]["text"])
 
     def test_malformed_signed_payloads_and_unauthorized_group_are_rejected(self):
         bot = Mock()
@@ -322,7 +412,7 @@ class IntegrationTests(unittest.TestCase):
         self.assertTrue(replied.wait(2), "Authorized private reply must finish.")
         self.worker.close()
         bot.line.reply.assert_called_once()
-        self.assertEqual(bot.line.reply.call_args.args[1][0]["type"], "image")
+        self.assertEqual(bot.line.reply.call_args.args[1][1]["type"], "image")
         bot.line.push.assert_not_called()
 
     def test_group_takes_priority_over_user_for_ingress_and_scheduled_delivery(self):
@@ -502,7 +592,7 @@ class IntegrationTests(unittest.TestCase):
                     [call.args[0] for call in bot.workflow.player.play.call_args_list],
                     [login_macro, "logout.json"],
                 )
-                self.assertEqual(bot.line.reply.call_args.args[1][0]["type"], "image")
+                self.assertEqual(bot.line.reply.call_args.args[1][1]["type"], "image")
                 self.assertEqual(detector.state(), SessionState.LOGGED_OUT)
         bot.line.push.assert_not_called()
 
@@ -661,7 +751,7 @@ class IntegrationTests(unittest.TestCase):
         bot.handle(self.event(), time.monotonic())
         bot.workflow.player.play.assert_not_called()
         bot.workflow.player._wait.assert_not_called()
-        self.assertEqual(bot.line.reply.call_args.args[1][0]["type"], "image")
+        self.assertEqual(bot.line.reply.call_args.args[1][1]["type"], "image")
 
     def test_capture_checks_anchor_once_then_delivers_even_when_anchor_stays_visible(
         self,
@@ -677,7 +767,7 @@ class IntegrationTests(unittest.TestCase):
                     bot.workflow.guard.wait_seconds = 0
                     bot.handle(self.event(), time.monotonic())
                     self.assertEqual(
-                        bot.line.reply.call_args.args[1][0]["type"], "image"
+                        bot.line.reply.call_args.args[1][1]["type"], "image"
                     )
                     detector.state.assert_called_once()
                     expected = (
