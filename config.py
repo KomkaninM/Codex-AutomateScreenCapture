@@ -85,7 +85,7 @@ class Settings:
     expected_height: int = 2000
     max_macro_seconds: float = 35.0
     image_ttl_seconds: int = 0
-    login_wait_seconds: float = 5.0
+    login_wait_seconds: float = 30.0
     line_webp_quality: int = 90
 
     @property
@@ -158,7 +158,7 @@ class Settings:
             expected_height=int(val("DESKTOP_HEIGHT", "2000")),
             max_macro_seconds=float(val("MAX_MACRO_SECONDS", "35")),
             image_ttl_seconds=int(val("IMAGE_TTL_SECONDS", "0")),
-            login_wait_seconds=float(val("LOGIN_WAIT_SECONDS", "5")),
+            login_wait_seconds=float(val("LOGIN_WAIT_SECONDS", "30")),
             line_webp_quality=int(val("LINE_WEBP_QUALITY", "90")),
         )
         ZoneInfo(cfg.timezone)

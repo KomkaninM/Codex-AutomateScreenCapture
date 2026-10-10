@@ -52,7 +52,7 @@ class IntegrationTests(unittest.TestCase):
         api = api or Mock(text=LineAPI.text, image=LineAPI.image)
         player = Mock()
         detector = detector or Mock(state=lambda: SessionState.LOGGED_IN)
-        guard = SessionGuard(detector, player, settle_delay=0)
+        guard = SessionGuard(detector, player, settle_delay=0, wait_seconds=0)
         wf = Workflow(
             self.runtime,
             player,
@@ -743,7 +743,7 @@ class IntegrationTests(unittest.TestCase):
         shot = bot.workflow.capture("07C")
         self.assertTrue(shot.archive.is_file())
         bot.workflow.player.play.assert_called_once_with("DH07C.json")
-        detector.state.assert_called_once()
+        self.assertEqual(detector.state.call_count, 2)
 
     def test_capture_without_login_anchor_skips_navigation_and_settle_wait(self):
         self.runtime = RuntimeConfig(replace(self.runtime.snapshot(), settle_delay=4))
@@ -753,7 +753,7 @@ class IntegrationTests(unittest.TestCase):
         bot.workflow.player._wait.assert_not_called()
         self.assertEqual(bot.line.reply.call_args.args[1][1]["type"], "image")
 
-    def test_capture_checks_anchor_once_then_delivers_even_when_anchor_stays_visible(
+    def test_capture_uses_timeout_fallback_when_login_anchor_stays_visible(
         self,
     ):
         for state in (SessionState.LOGGED_OUT, SessionState.LOGGED_IN):
@@ -769,7 +769,10 @@ class IntegrationTests(unittest.TestCase):
                     self.assertEqual(
                         bot.line.reply.call_args.args[1][1]["type"], "image"
                     )
-                    detector.state.assert_called_once()
+                    self.assertEqual(
+                        detector.state.call_count,
+                        2 if state == SessionState.LOGGED_OUT else 1,
+                    )
                     expected = (
                         ["login_bms.json"] if state == SessionState.LOGGED_OUT else []
                     )
