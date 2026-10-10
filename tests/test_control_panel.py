@@ -1,4 +1,5 @@
 import gc
+import inspect
 import json
 import os
 import queue
@@ -15,6 +16,13 @@ except ImportError:
 
 if tk is not None:
     from control_panel import ControlPanel
+
+
+@unittest.skipUnless(tk, "Tkinter is required")
+class ControlPanelInitializationTests(unittest.TestCase):
+    def test_dashboard_does_not_access_pages_created_after_it(self):
+        source = inspect.getsource(ControlPanel._dashboard)
+        self.assertNotIn("self.macros", source)
 
 
 class StubController:
@@ -185,6 +193,37 @@ class ControlPanelTests(unittest.TestCase):
             page.canvas.winfo_rooty() + page.canvas.winfo_height(),
         )
 
+    def test_persistent_header_controls_are_not_clipped_at_minimum_width(self):
+        self.root.deiconify()
+        self.root.geometry("940x620")
+        self.root.update()
+        for widget in (
+            self.app.theme_button,
+            self.app.header_status,
+            self.app.header_action,
+        ):
+            self.assertTrue(widget.winfo_viewable())
+            self.assertGreaterEqual(widget.winfo_width(), widget.winfo_reqwidth())
+            self.assertLessEqual(
+                widget.winfo_rootx() + widget.winfo_width(),
+                self.root.winfo_rootx() + self.root.winfo_width(),
+            )
+
+    def test_log_toolbar_actions_are_reachable_at_minimum_width(self):
+        self.root.deiconify()
+        self.root.geometry("940x620")
+        self.app.show_page("Dashboard")
+        self.root.update()
+        page = self.app.pages["Dashboard"]
+        page.canvas.yview_moveto(1)
+        self.root.update()
+        for widget in (self.app.copy_log_button, self.app.clear_log_button):
+            self.assertTrue(widget.winfo_viewable())
+            self.assertLessEqual(
+                widget.winfo_rootx() + widget.winfo_width(),
+                page.canvas.winfo_rootx() + page.canvas.winfo_width(),
+            )
+
     def test_target_editor_and_save_fit_minimum_window_size(self):
         self.root.deiconify()
         self.root.geometry("940x620")
@@ -196,6 +235,22 @@ class ControlPanelTests(unittest.TestCase):
                 widget.winfo_rooty() + widget.winfo_height(),
                 self.root.winfo_rooty() + self.root.winfo_height() - 30,
             )
+
+    def test_target_list_is_visible_and_selectable_at_minimum_window_size(self):
+        targets = self.app.targets
+        targets.rows = [
+            {"id": "09D", "name": "DH09D Generator", "macro": "DH09D.json"}
+        ]
+        targets.render()
+        self.root.deiconify()
+        self.root.geometry("940x620")
+        self.app.show_page("Targets")
+        self.root.update()
+        self.assertTrue(targets.table.winfo_viewable())
+        self.assertGreater(targets.table.winfo_height(), 40)
+        targets.table.selection_set("0")
+        targets._select()
+        self.assertEqual(targets.target_id.get(), "09D")
 
     def test_save_button_updates_env_and_clears_dirty_state(self):
         self.app.settings.variables["PORT"].set("8000")
@@ -269,6 +324,21 @@ class ControlPanelTests(unittest.TestCase):
         self.app.clear_log_view()
         self.assertEqual(self.app.log_buffer.lines, [])
 
+    def test_log_viewport_stays_put_when_following_is_disabled(self):
+        self.root.deiconify()
+        self.app.show_page("Dashboard")
+        for index in range(80):
+            self.app.log_buffer.append(f"Activity line {index}")
+        self.app._render_log()
+        self.root.update()
+        self.app.log_autoscroll.set(False)
+        self.app.log.yview_moveto(0.5)
+        self.root.update()
+        before = self.app.log.yview()[0]
+        self.app._append_log("One more activity line")
+        self.root.update()
+        self.assertAlmostEqual(self.app.log.yview()[0], before, delta=0.03)
+
     def test_using_macro_selects_settings_without_overwriting_unsaved_edits(self):
         self.app.settings.variables["PORT"].set("8000")
         self.app.macros.choose_default("login", "DH09D.json")
@@ -312,7 +382,7 @@ class ControlPanelTests(unittest.TestCase):
         targets._layout_editor(900)
         self.assertEqual(targets.editor.grid_info()["column"], 1)
         self.assertEqual(targets.editor.grid_info()["row"], 0)
-        targets._layout_editor(700)
+        targets._layout_editor(600)
         self.assertEqual(targets.editor.grid_info()["column"], 0)
         self.assertEqual(targets.editor.grid_info()["row"], 1)
 

@@ -3,6 +3,23 @@ import importlib.util
 import unittest
 
 
+def contrast_ratio(foreground, background):
+    def luminance(color):
+        channels = [int(color[index : index + 2], 16) / 255 for index in (1, 3, 5)]
+        linear = [
+            channel / 12.92
+            if channel <= 0.04045
+            else ((channel + 0.055) / 1.055) ** 2.4
+            for channel in channels
+        ]
+        return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+
+    lighter, darker = sorted(
+        (luminance(foreground), luminance(background)), reverse=True
+    )
+    return (lighter + 0.05) / (darker + 0.05)
+
+
 def load_module(testcase, name):
     testcase.assertIsNotNone(
         importlib.util.find_spec(name), f"{name} must be available"
@@ -84,6 +101,19 @@ class PanelThemeTests(unittest.TestCase):
             "Treeview",
         ):
             self.assertIn(required, style.configured)
+
+    def test_status_text_meets_normal_text_contrast_in_both_themes(self):
+        module = load_module(self, "panel_theme")
+        for theme_name in ("light", "dark"):
+            theme = module.palette(theme_name)
+            for tone in ("success", "warning", "danger"):
+                with self.subTest(theme=theme_name, tone=tone):
+                    self.assertGreaterEqual(
+                        contrast_ratio(
+                            getattr(theme, tone), getattr(theme, f"{tone}_surface")
+                        ),
+                        4.5,
+                    )
 
 
 class PanelWidgetUtilityTests(unittest.TestCase):

@@ -213,7 +213,7 @@ class ControlPanel:
             title_area,
             text=PAGE_DESCRIPTIONS["Dashboard"],
             style="Muted.TLabel",
-            wraplength=650,
+            wraplength=300,
         )
         self.subtitle.pack(anchor="w", pady=(5, 0))
         header_actions = ttk.Frame(header, style="Header.TFrame")
@@ -354,8 +354,6 @@ class ControlPanel:
             )
         self.setup_table.tag_configure("warning", foreground=self.theme.warning)
         self.setup_table.tag_configure("ready", foreground=self.theme.success)
-        self.macros.table.tag_configure("ready", foreground=self.theme.success)
-        self.macros.table.tag_configure("invalid", foreground=self.theme.danger)
         setup_scroll = ttk.Scrollbar(
             setup, orient="vertical", command=self.setup_table.yview
         )
@@ -381,13 +379,15 @@ class ControlPanel:
         )
         log_tools = ttk.Frame(page.body, style="Page.TFrame")
         log_tools.pack(fill="x", pady=(0, 8))
-        ttk.Label(log_tools, text="Search", style="Muted.TLabel").pack(side="left")
+        log_filters = ttk.Frame(log_tools, style="Page.TFrame")
+        log_filters.pack(fill="x")
+        ttk.Label(log_filters, text="Search", style="Muted.TLabel").pack(side="left")
         self.log_search = ttk.Entry(
-            log_tools, textvariable=self.log_query, width=24
+            log_filters, textvariable=self.log_query, width=24
         )
         self.log_search.pack(side="left", padx=(6, 8))
         self.log_filter_box = ttk.Combobox(
-            log_tools,
+            log_filters,
             textvariable=self.log_filter,
             values=("All activity", "Information", "Warnings", "Errors"),
             state="readonly",
@@ -395,16 +395,18 @@ class ControlPanel:
         )
         self.log_filter_box.pack(side="left")
         ttk.Checkbutton(
-            log_tools,
+            log_filters,
             text="Follow new activity",
             variable=self.log_autoscroll,
         ).pack(side="left", padx=10)
+        log_actions = ttk.Frame(log_tools, style="Page.TFrame")
+        log_actions.pack(fill="x", pady=(8, 0))
         self.clear_log_button = ttk.Button(
-            log_tools, text="Clear view", command=self.clear_log_view
+            log_actions, text="Clear view", command=self.clear_log_view
         )
         self.clear_log_button.pack(side="right")
         self.copy_log_button = ttk.Button(
-            log_tools, text="Copy visible", command=self.copy_log
+            log_actions, text="Copy visible", command=self.copy_log
         )
         self.copy_log_button.pack(side="right", padx=(0, 8))
         log_frame = ttk.Frame(page.body, style="Page.TFrame")
@@ -532,6 +534,8 @@ class ControlPanel:
         )
         self.setup_table.tag_configure("warning", foreground=self.theme.warning)
         self.setup_table.tag_configure("ready", foreground=self.theme.success)
+        self.macros.table.tag_configure("ready", foreground=self.theme.success)
+        self.macros.table.tag_configure("invalid", foreground=self.theme.danger)
         self.theme_button.configure(
             text="Light theme" if self.theme_name == "dark" else "Dark theme"
         )
@@ -762,6 +766,8 @@ class ControlPanel:
         visible = self.log_buffer.visible(
             query=self.log_query.get(), levels=self._selected_log_levels()
         )
+        follow = self.log_autoscroll.get()
+        previous_position = self.log.yview()[0]
         self.log.configure(state="normal")
         self.log.delete("1.0", "end")
         self.log.tag_configure("info", foreground=self.theme.log_text)
@@ -769,8 +775,10 @@ class ControlPanel:
         self.log.tag_configure("error", foreground=self.theme.danger)
         for line in visible:
             self.log.insert("end", line + "\n", classify_log_line(line))
-        if self.log_autoscroll.get():
+        if follow:
             self.log.see("end")
+        else:
+            self.log.yview_moveto(previous_position)
         self.log.configure(state="disabled")
         total = len(self.log_buffer.lines)
         self.log_count.set(

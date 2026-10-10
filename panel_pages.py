@@ -580,7 +580,7 @@ class TargetsPage(ttk.Frame):
         self.reload()
 
     def _layout_editor(self, width):
-        mode = responsive_mode(width, breakpoint=780)
+        mode = responsive_mode(width, breakpoint=620)
         if mode == self.layout_mode:
             return
         self.layout_mode = mode

@@ -75,7 +75,7 @@ _PALETTES = {
         warning="#FBBF24",
         warning_surface="#713F12",
         danger="#F87171",
-        danger_surface="#7F1D1D",
+        danger_surface="#450A0A",
         sidebar="#090F1C",
         sidebar_active="#1E3A5F",
         sidebar_text="#F8FAFC",
@@ -261,4 +261,3 @@ def configure_ttk_styles(style, theme, font_family, mono_family):
         bordercolor=theme.border,
         font=(font_family, 10, "bold"),
     )
-
