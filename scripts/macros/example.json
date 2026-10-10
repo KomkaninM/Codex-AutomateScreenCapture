@@ -1,0 +1,5 @@
+{
+  "steps": [
+    {"action": "sleep", "seconds": 0.2}
+  ]
+}
