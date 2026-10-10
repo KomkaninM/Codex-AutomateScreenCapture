@@ -1,4 +1,4 @@
-"""Record, convert, export, and play private BMS JSON macros."""
+"""Record, generate, convert, export, and play private BMS JSON macros."""
 
 from __future__ import annotations
 
@@ -10,8 +10,10 @@ import os
 import secrets
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 from contextlib import nullcontext
+from urllib.parse import urlsplit
 
 from config import BASE_DIR, Settings, macro_name
 from macro_player import MacroPlayer, enable_dpi_awareness
@@ -39,6 +41,36 @@ def convert_legacy(data):
         step.setdefault("delay", delay)
         steps.append({"action": action, **step})
     result["steps"] = steps
+    return result
+
+
+def build_from_template(template, name, url):
+    """Copy a private login macro and replace its label and navigation URL."""
+    if not isinstance(template, dict) or not isinstance(template.get("steps"), list):
+        raise ValueError("Template macro JSON must contain a steps array.")
+    url = url.strip() if isinstance(url, str) else ""
+    parsed = urlsplit(url)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        raise ValueError("Enter the complete http or https generator URL.")
+    result = copy.deepcopy(template)
+    navigation = next(
+        (
+            step
+            for step in reversed(result["steps"])
+            if isinstance(step, dict)
+            and step.get("action") == "text"
+            and isinstance(step.get("text"), str)
+            and step["text"].startswith(("http://", "https://"))
+        ),
+        None,
+    )
+    if navigation is None:
+        raise ValueError("The template macro does not contain a navigation URL step.")
+    result["name"] = name
+    result["description"] = "Generated on " + datetime.now().strftime(
+        "%Y-%m-%d %H:%M:%S"
+    )
+    navigation["text"] = url
     return result
 
 
@@ -87,22 +119,33 @@ def parser():
         "--source", type=Path, help="Old JSON file; omitted reads copied JSON text."
     )
     convert.add_argument("--overwrite", action="store_true")
+    template = modes.add_parser(
+        "template", help="Copy the configured login macro with a new name and URL."
+    )
+    template.add_argument("name", help="Output filename, e.g. DH08C.json")
+    template.add_argument("url", help="Complete BMS generator URL")
+    template.set_defaults(overwrite=False)
     return command
 
 
 def menu(command):
     print(
-        "\nBMS MACRO TOOL\n1. Record a new macro\n2. Play a saved macro\n3. Convert old JSON\n4. Exit"
+        "\nBMS MACRO TOOL\n1. Record a new macro\n2. Play a saved macro\n3. Convert old JSON\n4. Create from login template\n5. Exit"
     )
-    choice = input("Choose 1–4: ").strip()
-    if choice == "4":
+    choice = input("Choose 1–5: ").strip()
+    if choice == "5":
         return None
-    if choice not in ("1", "2", "3"):
-        raise ValueError("Choose 1, 2, 3, or 4.")
+    if choice not in ("1", "2", "3", "4"):
+        raise ValueError("Choose 1, 2, 3, 4, or 5.")
     name = input("Macro filename (example: DH09D.json): ").strip()
     if name and not name.endswith(".json"):
         name += ".json"
-    args = [{"1": "record", "2": "play", "3": "convert"}[choice], macro_name(name)]
+    args = [
+        {"1": "record", "2": "play", "3": "convert", "4": "template"}[
+            choice
+        ],
+        macro_name(name),
+    ]
     if choice == "3":
         source = (
             input("Old JSON file path, or leave blank after copying the JSON: ")
@@ -111,6 +154,8 @@ def menu(command):
         )
         if source:
             args += ["--source", source]
+    elif choice == "4":
+        args.append(input("Complete BMS generator URL: ").strip())
     return command.parse_args(args)
 
 
@@ -138,6 +183,23 @@ def run(args, cfg):
         data.setdefault(
             "desktop", {"width": cfg.expected_width, "height": cfg.expected_height}
         )
+    elif args.command == "template":
+        macro_directory = cfg.macros_dir.resolve()
+        template_path = (
+            macro_directory / macro_name(cfg.default_login_macro)
+        ).resolve()
+        if template_path.parent != macro_directory:
+            raise ValueError("Macro path escapes the macro directory.")
+        if not template_path.is_file():
+            raise FileNotFoundError(
+                "Configured login template was not found: " + template_path.name
+            )
+        if template_path.stat().st_size > 1_000_000:
+            raise ValueError("Configured login template exceeds 1 MB.")
+        template = convert_legacy(
+            json.loads(template_path.read_text(encoding="utf-8-sig"))
+        )
+        data = build_from_template(template, Path(name).stem, args.url)
     else:
         if sys.platform != "win32":
             raise RuntimeError("Recording and playback require your Windows desktop.")

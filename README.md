@@ -151,7 +151,7 @@ Unexpected failures still receive a generic LINE response; the console records t
 
 LINE exposes group **member count**, not each member's block status. The dashboard labels membership as an upper bound instead of inventing an unblocked target reach. The wrapper also supports daily follower insights and eligible-account follower ID enumeration; follower reach is not interchangeable with group reach. Metrics unavailable for the account or group are displayed as unavailable, and an unlimited quota is displayed explicitly.
 
-## Record, convert, and play macros
+## Record, generate, convert, and play macros
 
 Double-click **`macro_tool.bat`** to open the macro tool. It installs/reuses the launcher environment and opens a numbered menu; it does not start the bot or ngrok. Stop the bot and close its launcher before recording or playing, because both tools share its desktop instance lock.
 
@@ -170,6 +170,8 @@ To play, choose **2 — Play**, enter the filename, and switch to the correct BM
 
 To convert your old DH09D macro on your PC, copy its **complete JSON** from the chat, choose **3 — Convert old JSON**, enter `DH09D.json`, and leave the source-path prompt blank to read the copied JSON. Alternatively select a local JSON file. Conversion preserves coordinates, text, the navigation URL, and every `post_delay`; `default_post_delay` supplies missing delays. The output uses `click`, `text`, `press`, and `delay` and records the configured desktop dimensions. Existing files are preserved by default; choose another filename or explicitly use `--overwrite` from the command line.
 
+To create another macro with the same login sequence, first make sure `LOGIN_MACRO_SCRIPT` names your working private login macro. Choose **4 — Create from login template**, enter the new macro name such as `DH08C`, then paste the complete BMS generator URL. The tool copies the configured login macro and changes only its name, generated description, and final HTTP/HTTPS text step. Coordinates, login text, delays, and desktop metadata stay unchanged. The original template and any existing destination file are preserved.
+
 The supplied DH09D script contains a complete login followed by navigation. Start standalone playback on the login page. To use it for session-timeout recovery, set `LOGIN_MACRO_SCRIPT=DH09D.json` in `.env` or send `set-login DH09D.json`, then use untargeted `capture`. Its URL was preserved exactly and contains `DH09-C`, despite the DH09D filename. Recorded/login scripts with credentials are ignored by Git and are not included in the GitHub ZIP; create/import them locally using the tool.
 
 For direct Python execution after installing requirements:
@@ -180,6 +182,8 @@ For direct Python execution after installing requirements:
 .\.venv-launcher\Scripts\python.exe macro_tool.py convert DH09D.json --source "C:\path\old_DH09D.json"
 # Read complete JSON copied to the clipboard:
 .\.venv-launcher\Scripts\python.exe macro_tool.py convert DH09D.json
+# Copy LOGIN_MACRO_SCRIPT and replace its name and navigation URL:
+.\.venv-launcher\Scripts\python.exe macro_tool.py template DH08C "https://10.121.48.14/complete-generator-url"
 ```
 
 Live recording uses the Windows-only `pynput` dependency; the recorder/converter tests run without desktop hooks on Linux. Actual Windows hooks, keyboard layout, and BMS input behavior require a local check.

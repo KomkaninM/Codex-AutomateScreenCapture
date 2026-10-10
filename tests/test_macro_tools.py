@@ -1,5 +1,6 @@
 import json
 import io
+import copy
 import subprocess
 import tempfile
 import unittest
@@ -9,9 +10,10 @@ from enum import Enum
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
+import macro_tool
 from macro_player import MacroPlayer
 from macro_recorder import RecordedMacro, translate_key, record_macro
-from macro_tool import convert_legacy, save_macro, run
+from macro_tool import convert_legacy, menu, parser, save_macro, run
 from config import Settings
 from launcher import bootstrap
 
@@ -31,6 +33,140 @@ class MacroToolTests(unittest.TestCase):
             clipboard=lambda: "อาคาร status",
             name="test",
         )
+
+    def test_template_builder_changes_only_name_description_and_navigation_url(self):
+        template = {
+            "name": "Private login template",
+            "description": "Existing description",
+            "steps": [
+                {"action": "text", "text": "private operator text", "delay": 0.1},
+                {
+                    "action": "text",
+                    "text": "https://old.example.invalid/generator",
+                    "delay": 0.3,
+                },
+                {"action": "press", "key": "enter", "delay": 0.7},
+            ],
+            "desktop": {"width": 3000, "height": 2000},
+        }
+        original = copy.deepcopy(template)
+        builder = getattr(macro_tool, "build_from_template", None)
+        self.assertIsNotNone(builder, "macro_tool must provide build_from_template")
+
+        generated = builder(
+            template,
+            "DH08C",
+            "https://10.121.48.14/generator/DH08C",
+        )
+
+        self.assertEqual(template, original)
+        self.assertEqual(generated["name"], "DH08C")
+        self.assertRegex(
+            generated["description"], r"^Generated on \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$"
+        )
+        self.assertEqual(generated["steps"][0], template["steps"][0])
+        self.assertEqual(
+            generated["steps"][1],
+            {
+                "action": "text",
+                "text": "https://10.121.48.14/generator/DH08C",
+                "delay": 0.3,
+            },
+        )
+        self.assertEqual(generated["steps"][2], template["steps"][2])
+        self.assertEqual(generated["desktop"], template["desktop"])
+
+    def test_template_builder_rejects_bad_url_or_template_without_navigation(self):
+        builder = getattr(macro_tool, "build_from_template", None)
+        self.assertIsNotNone(builder, "macro_tool must provide build_from_template")
+        template = {
+            "steps": [
+                {"action": "text", "text": "private operator text", "delay": 0.1}
+            ]
+        }
+        with self.assertRaisesRegex(ValueError, "complete http"):
+            builder(template, "DH08C", "not a URL")
+        with self.assertRaisesRegex(ValueError, "navigation URL"):
+            builder(template, "DH08C", "https://10.121.48.14/generator/DH08C")
+
+    def test_template_menu_collects_only_name_and_complete_url(self):
+        url = "https://10.121.48.14/generator/DH08C"
+        with patch(
+            "builtins.input", side_effect=["4", "DH08C", url]
+        ), redirect_stdout(io.StringIO()):
+            args = menu(parser())
+        self.assertEqual(args.command, "template")
+        self.assertEqual(args.name, "DH08C.json")
+        self.assertEqual(args.url, url)
+
+    def test_template_command_copies_configured_login_macro_and_saves_new_file(self):
+        cfg = Settings(project_dir=self.root, default_login_macro="base.json")
+        template = {
+            "name": "Base",
+            "description": "Private template",
+            "steps": [
+                {"action": "click", "x": 10, "y": 20, "delay": 0.1},
+                {"action": "text", "text": "private operator text", "delay": 0.1},
+                {
+                    "action": "text",
+                    "text": "https://old.example.invalid/generator",
+                    "delay": 0.3,
+                },
+                {"action": "press", "key": "enter", "delay": 0.7},
+            ],
+            "desktop": {"width": 3000, "height": 2000},
+        }
+        save_macro(cfg.macros_dir, "base.json", template)
+        args = SimpleNamespace(
+            command="template",
+            name="DH08C.json",
+            url="https://10.121.48.14/generator/DH08C",
+            overwrite=False,
+        )
+
+        with redirect_stdout(io.StringIO()):
+            run(args, cfg)
+
+        generated = json.loads((cfg.macros_dir / "DH08C.json").read_text())
+        self.assertEqual(generated["name"], "DH08C")
+        self.assertEqual(
+            generated["steps"][2]["text"],
+            "https://10.121.48.14/generator/DH08C",
+        )
+        self.assertEqual(
+            json.loads((cfg.macros_dir / "base.json").read_text()), template
+        )
+
+    def test_template_command_rejects_login_template_symlink_outside_macro_folder(self):
+        cfg = Settings(project_dir=self.root, default_login_macro="base.json")
+        cfg.macros_dir.mkdir(parents=True)
+        outside = self.root / "private-outside.json"
+        outside.write_text(
+            json.dumps(
+                {
+                    "steps": [
+                        {
+                            "action": "text",
+                            "text": "https://old.example.invalid/generator",
+                        }
+                    ]
+                }
+            )
+        )
+        try:
+            (cfg.macros_dir / "base.json").symlink_to(outside)
+        except OSError as error:
+            self.skipTest(f"Symlinks unavailable: {error}")
+        args = SimpleNamespace(
+            command="template",
+            name="DH08C.json",
+            url="https://10.121.48.14/generator/DH08C",
+            overwrite=False,
+        )
+
+        with self.assertRaisesRegex(ValueError, "escapes the macro directory"):
+            run(args, cfg)
+        self.assertFalse((cfg.macros_dir / "DH08C.json").exists())
 
     def test_legacy_conversion_preserves_coordinates_text_and_post_delays(self):
         source = {
