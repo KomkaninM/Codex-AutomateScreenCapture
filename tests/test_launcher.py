@@ -2,7 +2,6 @@ import subprocess
 import io
 import tempfile
 import unittest
-from types import SimpleNamespace
 from pathlib import Path
 from unittest.mock import Mock, patch
 from config import Settings
@@ -150,8 +149,12 @@ class LauncherTests(unittest.TestCase):
         self.assertIsNone(find_tunnel(data, 5000))
 
     def test_explicit_public_origin_is_respected_when_domain_alias_is_blank(self):
-        cfg = SimpleNamespace(
-            ngrok_domain="", public_tunnel_url="https://configured.ngrok.app", port=5000
+        cfg = Settings(
+            project_dir=self.root,
+            ngrok_domain="",
+            public_tunnel_url="https://configured.ngrok.app",
+            ngrok_exe_path="missing-ngrok.exe",
+            port=5000,
         )
         data = {
             "tunnels": [

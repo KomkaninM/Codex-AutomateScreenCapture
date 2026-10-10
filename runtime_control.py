@@ -7,6 +7,7 @@ import os
 import re
 import secrets
 import threading
+import time
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -33,9 +34,28 @@ class ControlSession:
             with draft.open("x", encoding="utf-8") as file:
                 os.chmod(draft, 0o600)
                 json.dump({"stage": stage, "pid": os.getpid(), **details}, file)
-            os.replace(draft, self.status_path)
+            # Windows readers and sync clients can briefly deny replacement.
+            # Keep the previous complete status visible until replacement succeeds.
+            for delay in (0, 0.05, 0.1, 0.2, 0.4, 0.8):
+                if delay:
+                    time.sleep(delay)
+                try:
+                    os.replace(draft, self.status_path)
+                    break
+                except PermissionError:
+                    if delay == 0.8:
+                        raise RuntimeError(
+                            "Windows kept the bot status file locked. Close duplicate bot "
+                            "windows and pause OneDrive syncing, then try again. If it "
+                            "continues, copy the complete project to a writable folder "
+                            "outside OneDrive, such as C:\\BMSBot."
+                        ) from None
         finally:
-            draft.unlink(missing_ok=True)
+            try:
+                draft.unlink(missing_ok=True)
+            except PermissionError:
+                # A sync client may also hold the abandoned private draft open.
+                pass
 
     def read_status(self):
         try:

@@ -44,6 +44,52 @@ class PanelProcessTests(unittest.TestCase):
             self.assertTrue(stopped.wait(2))
         self.assertEqual(calls, [True])
 
+    def test_status_publish_recovers_from_temporary_windows_file_lock(self):
+        session = ControlSession(self.root)
+        session.publish("preparing")
+        replace = os.replace
+        attempts = []
+
+        def locked_replace(source, destination):
+            attempts.append(True)
+            if len(attempts) < 3:
+                self.assertEqual(session.read_status()["stage"], "preparing")
+                raise PermissionError(13, "Windows temporarily locked the status file")
+            return replace(source, destination)
+
+        with patch("runtime_control.os.replace", side_effect=locked_replace):
+            session.publish("online", port=5000)
+        self.assertEqual(session.read_status()["stage"], "online")
+        self.assertEqual(session.read_status()["port"], 5000)
+        self.assertEqual(list(session.directory.glob("*.tmp")), [])
+
+    def test_persistent_status_lock_has_actionable_error_and_preserves_previous_status(
+        self,
+    ):
+        session = ControlSession(self.root)
+        session.publish("preparing")
+        with patch(
+            "runtime_control.os.replace", side_effect=PermissionError(13, "locked")
+        ):
+            with self.assertRaisesRegex(RuntimeError, "OneDrive"):
+                session.publish("online")
+        self.assertEqual(session.read_status()["stage"], "preparing")
+        self.assertEqual(list(session.directory.glob("*.tmp")), [])
+
+    @unittest.skipUnless(os.name == "nt", "Requires actual Windows file sharing")
+    def test_windows_open_status_reader_can_close_while_publisher_retries(self):
+        session = ControlSession(self.root)
+        session.publish("preparing")
+        reader = session.status_path.open("rb")
+        release = threading.Timer(0.12, reader.close)
+        release.start()
+        try:
+            session.publish("online")
+        finally:
+            release.join(timeout=2)
+            reader.close()
+        self.assertEqual(session.read_status()["stage"], "online")
+
     def test_noninteractive_setup_reports_missing_credentials_without_prompt(self):
         (self.root / ".env").write_text("")
         with patch("launcher.input") as prompt, patch(

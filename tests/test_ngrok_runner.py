@@ -1,5 +1,6 @@
 import io
 import json
+import socket
 import subprocess
 import sys
 import tempfile
@@ -42,6 +43,73 @@ class NgrokRunnerTests(unittest.TestCase):
         self.assertIsNone(
             prepare_auth_config(Settings(project_dir=self.root), self.root)
         )
+        self.assertFalse((self.root / ".runtime" / "ngrok.yml").exists())
+
+    def test_other_ngrok_tunnel_stays_running_and_owned_agent_uses_separate_inspector(
+        self,
+    ):
+        unrelated = {
+            "tunnels": [
+                {
+                    "public_url": "https://other.ngrok.app",
+                    "config": {"addr": "http://localhost:8000"},
+                }
+            ]
+        }
+        own = {
+            "tunnels": [
+                {
+                    "public_url": "https://bms.ngrok.app",
+                    "config": {"addr": "http://localhost:5000"},
+                }
+            ]
+        }
+        occupied = socket.socket()
+        self.addCleanup(occupied.close)
+        try:
+            occupied.bind(("127.0.0.1", 4040))
+            occupied.listen()
+        except OSError:
+            self.skipTest(
+                "Inspection port 4040 is already used by another local service"
+            )
+        process = Mock(poll=lambda: None, stdout=io.StringIO(""))
+        calls = []
+
+        def inspection(port=4040):
+            calls.append(port)
+            return unrelated if port == 4040 else own
+
+        with patch("launcher.read_tunnels", side_effect=inspection), patch(
+            "launcher.subprocess.Popen", return_value=process
+        ), redirect_stdout(io.StringIO()):
+            url, owned = start_tunnel(self.cfg, self.root)
+            self.addCleanup(stop_owned_process, owned)
+        self.assertEqual(url, "https://bms.ngrok.app")
+        self.assertIs(owned, process)
+        config = json.loads((self.root / ".runtime" / "ngrok.yml").read_text())
+        port = int(config["web_addr"].rsplit(":", 1)[1])
+        self.assertNotEqual(port, 4040)
+        self.assertIn(port, calls)
+        self.assertEqual(occupied.getsockname()[1], 4040)
+        process.terminate.assert_not_called()
+
+    def test_separate_agent_without_project_token_has_actionable_setup_error(self):
+        cfg = Settings(project_dir=self.root, ngrok_exe_path=str(self.binary))
+        other = {
+            "tunnels": [
+                {
+                    "public_url": "https://other.ngrok.app",
+                    "config": {"addr": "http://localhost:8000"},
+                }
+            ]
+        }
+        with patch("launcher.read_tunnels", return_value=other), patch(
+            "launcher.subprocess.Popen"
+        ) as popen:
+            with self.assertRaisesRegex(RuntimeError, "NGROK_AUTHTOKEN"):
+                start_tunnel(cfg, self.root)
+        popen.assert_not_called()
         self.assertFalse((self.root / ".runtime" / "ngrok.yml").exists())
 
     def test_ngrok_output_survives_process_exit_and_redacts_tokens(self):

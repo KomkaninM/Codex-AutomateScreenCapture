@@ -23,7 +23,7 @@ def runtime_path(project, filename):
     return path
 
 
-def prepare_auth_config(cfg, project):
+def prepare_auth_config(cfg, project, *, inspector_port=4040):
     if not cfg.ngrok_authtoken:
         # Preserve existing authenticated ngrok installations when .env is blank.
         return None
@@ -39,7 +39,7 @@ def prepare_auth_config(cfg, project):
                 {
                     "version": "2",
                     "authtoken": cfg.ngrok_authtoken,
-                    "web_addr": "127.0.0.1:4040",
+                    "web_addr": f"127.0.0.1:{inspector_port}",
                 },
                 handle,
             )
@@ -57,7 +57,7 @@ class NgrokStartupError(RuntimeError):
         if self.auth_problem:
             hint = "ngrok needs a verified account and a valid NGROK_AUTHTOKEN."
         elif code in {"ERR_NGROK_108", "ERR_NGROK_334"}:
-            hint = "Another ngrok agent or endpoint is already active; check your existing ngrok sessions."
+            hint = "ngrok rejected a concurrent agent or an endpoint already in use; check account session limits and use distinct endpoint URLs."
         else:
             hint = "Check the error above and .runtime/ngrok.log for authentication, domain, or network details."
         label = code or f"exit status {exit_code}"

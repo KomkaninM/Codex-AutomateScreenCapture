@@ -7,6 +7,7 @@ import _thread
 import json
 import os
 import shutil
+import socket
 import subprocess
 import sys
 import time
@@ -223,11 +224,13 @@ def find_tunnel(data, port, expected_domain=""):
     return None
 
 
-def read_tunnels():
+def read_tunnels(inspector_port=4040):
     # This is the official local ngrok inspector, not an external network request.
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     try:
-        with opener.open("http://127.0.0.1:4040/api/tunnels", timeout=2) as response:
+        with opener.open(
+            f"http://127.0.0.1:{inspector_port}/api/tunnels", timeout=2
+        ) as response:
             return json.loads(response.read(1_000_000))
     except (OSError, ValueError):
         return None
@@ -250,6 +253,23 @@ def stop_owned_process(process):
             diagnostics.join()
 
 
+def select_inspector_port(bot_port, *, separate=False):
+    if not separate and bot_port != 4040:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            try:
+                probe.bind(("127.0.0.1", 4040))
+                return 4040
+            except OSError:
+                pass
+    for _ in range(3):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            probe.bind(("127.0.0.1", 0))
+            port = probe.getsockname()[1]
+            if port != bot_port:
+                return port
+    raise RuntimeError("Could not choose a free local ngrok inspection port.")
+
+
 def start_tunnel(cfg, project):
     domain = cfg.ngrok_domain or cfg.public_tunnel_url
     if domain:
@@ -261,11 +281,6 @@ def start_tunnel(cfg, project):
             "Using your existing ngrok tunnel. The launcher will leave that process running."
         )
         return url, None
-    if existing is not None:
-        raise RuntimeError(
-            "An ngrok inspector is already running on port 4040 for a different tunnel. "
-            "Configure it for this bot port/domain, or stop that agent yourself and try again."
-        )
     configured_path = cfg.ngrok_exe_path.strip()
     if configured_path:
         executable = Path(os.path.expandvars(configured_path)).expanduser()
@@ -288,7 +303,19 @@ def start_tunnel(cfg, project):
             "start_bot.bat, then launch again."
         )
     environment = os.environ.copy()
-    auth_config = prepare_auth_config(cfg, project)
+    inspector_port = select_inspector_port(cfg.port, separate=existing is not None)
+    if inspector_port != 4040:
+        if not cfg.ngrok_authtoken:
+            raise RuntimeError(
+                "The bot needs a separate ngrok inspection port. Add NGROK_AUTHTOKEN "
+                "in Settings or .env so it can start its own agent. Any existing ngrok "
+                "agent is left running."
+            )
+        say(
+            f"Using local ngrok inspection port {inspector_port}; "
+            "existing ngrok agents are left running."
+        )
+    auth_config = prepare_auth_config(cfg, project, inspector_port=inspector_port)
     if cfg.ngrok_authtoken:
         environment["NGROK_AUTHTOKEN"] = cfg.ngrok_authtoken
     args = [binary, "http", str(cfg.port)]
@@ -328,7 +355,7 @@ def start_tunnel(cfg, project):
             if exit_code is not None:
                 diagnostics.join()
                 raise NgrokStartupError(diagnostics.error_code, exit_code)
-            url = find_tunnel(read_tunnels(), cfg.port, domain or "")
+            url = find_tunnel(read_tunnels(inspector_port), cfg.port, domain or "")
             if url:
                 return url, process
             time.sleep(0.25)
