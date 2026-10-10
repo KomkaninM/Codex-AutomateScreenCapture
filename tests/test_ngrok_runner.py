@@ -66,13 +66,12 @@ class NgrokRunnerTests(unittest.TestCase):
         }
         occupied = socket.socket()
         self.addCleanup(occupied.close)
-        try:
-            occupied.bind(("127.0.0.1", 4040))
-            occupied.listen()
-        except OSError:
-            self.skipTest(
-                "Inspection port 4040 is already used by another local service"
-            )
+        # The API adapter below supplies the external agent's 4040 response.
+        # Keep a real unrelated listener on an OS-assigned port, never requiring
+        # ownership of a port an operator may already use.
+        occupied.bind(("127.0.0.1", 0))
+        occupied.listen()
+        external_port = occupied.getsockname()[1]
         process = Mock(poll=lambda: None, stdout=io.StringIO(""))
         calls = []
 
@@ -90,8 +89,9 @@ class NgrokRunnerTests(unittest.TestCase):
         config = json.loads((self.root / ".runtime" / "ngrok.yml").read_text())
         port = int(config["web_addr"].rsplit(":", 1)[1])
         self.assertNotEqual(port, 4040)
+        self.assertNotEqual(port, external_port)
         self.assertIn(port, calls)
-        self.assertEqual(occupied.getsockname()[1], 4040)
+        self.assertEqual(occupied.getsockname()[1], external_port)
         process.terminate.assert_not_called()
 
     def test_separate_agent_without_project_token_has_actionable_setup_error(self):

@@ -49,6 +49,11 @@ class LauncherTests(unittest.TestCase):
         quiet = patch("launcher.say")
         quiet.start()
         self.addCleanup(quiet.stop)
+        # These unit tests already replace the ngrok process and API. Isolate
+        # its port selection too, so installed services cannot alter the fixture.
+        inspector = patch("launcher.select_inspector_port", return_value=4040)
+        inspector.start()
+        self.addCleanup(inspector.stop)
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
