@@ -15,9 +15,6 @@ from tkinter import font as tkfont, messagebox, ttk
 from config import BASE_DIR, Settings, macro_name
 from line_api import LineAPI
 from panel_pages import (
-    BACKGROUND,
-    TEXT,
-    MUTED,
     Scrollable,
     HelpPage,
     MacrosPage,
@@ -26,6 +23,8 @@ from panel_pages import (
 )
 from panel_process import ProcessController
 from panel_settings import ProjectStore, fingerprint
+from panel_theme import configure_ttk_styles, palette, preferred_theme
+from panel_widgets import LogViewBuffer, classify_log_line, status_style
 
 PAGE_DESCRIPTIONS = {
     "Dashboard": "Start your bot, check its connection, and see what it is doing.",
@@ -58,6 +57,13 @@ class ControlPanel:
         self.current_page = "Dashboard"
         self.last_state = ""
         self.disposed = False
+        self.theme_name = preferred_theme()
+        self.theme = palette(self.theme_name)
+        self.log_buffer = LogViewBuffer(limit=800)
+        self.log_query = tk.StringVar(value="")
+        self.log_filter = tk.StringVar(value="All activity")
+        self.log_autoscroll = tk.BooleanVar(value=True)
+        self.log_count = tk.StringVar(value="No activity yet")
         self.minimize_on_start = tk.BooleanVar(value=True)
         self.notice = tk.StringVar(
             value="Welcome. Check your settings, then click Start Bot."
@@ -71,7 +77,7 @@ class ControlPanel:
             f"{min(1180, root.winfo_screenwidth() - 80)}x{min(800, root.winfo_screenheight() - 100)}"
         )
         root.minsize(940, 620)
-        root.configure(background=BACKGROUND)
+        root.configure(background=self.theme.background)
         root.protocol("WM_DELETE_WINDOW", self.request_close)
         self._styles()
         self._shell()
@@ -102,179 +108,142 @@ class ControlPanel:
             else tkfont.nametofont("TkDefaultFont").actual("family")
         )
         self.mono_family = "Consolas" if os.name == "nt" else "Courier"
-        style = ttk.Style(self.root)
-        style.theme_use("clam")
-        style.configure(".", font=(self.font_family, 10), foreground=TEXT)
-        style.configure("Page.TFrame", background=BACKGROUND)
-        style.configure("Card.TFrame", background="white")
-        style.configure(
-            "Card.TLabelframe",
-            background="white",
-            bordercolor="#d9e1ea",
-            relief="solid",
-        )
-        style.configure(
-            "Card.TLabelframe.Label",
-            background="white",
-            foreground=TEXT,
-            font=(self.font_family, 11, "bold"),
-        )
-        style.configure("Field.TLabel", background="white", foreground=TEXT)
-        style.configure(
-            "Hint.TLabel",
-            background="white",
-            foreground=MUTED,
-            font=(self.font_family, 9),
-        )
-        style.configure(
-            "Help.TLabel",
-            background="white",
-            foreground=TEXT,
-            font=(self.font_family, 10),
-        )
-        style.configure("Muted.TLabel", background=BACKGROUND, foreground=MUTED)
-        style.configure(
-            "PageTitle.TLabel",
-            background=BACKGROUND,
-            foreground=TEXT,
-            font=(self.font_family, 23, "bold"),
-        )
-        style.configure(
-            "Status.TLabel",
-            background=BACKGROUND,
-            foreground="#147b63",
-            font=(self.font_family, 12, "bold"),
-        )
-        style.configure("Card.TCheckbutton", background="white")
-        style.configure("TCheckbutton", background=BACKGROUND)
-        style.configure(
-            "TButton",
-            padding=(12, 8),
-            background="white",
-            bordercolor="#cbd6e3",
-            focuscolor="",
-        )
-        style.map("TButton", background=[("active", "#e6edf4")])
-        style.configure(
-            "Primary.TButton",
-            background="#087f76",
-            foreground="white",
-            bordercolor="#087f76",
-            font=(self.font_family, 10, "bold"),
-        )
-        style.map(
-            "Primary.TButton",
-            background=[("disabled", "#c7d4da"), ("active", "#086b63")],
-            foreground=[("disabled", "#647581")],
-        )
-        style.configure("Danger.TButton", foreground="#ab3a38")
-        style.configure("TEntry", fieldbackground="white", padding=7)
-        style.configure("TCombobox", fieldbackground="white", padding=6)
-        style.map("TCombobox", fieldbackground=[("readonly", "white")])
-        style.configure("TNotebook", background=BACKGROUND, borderwidth=0)
-        style.configure("TNotebook.Tab", padding=(18, 10))
-        style.configure(
-            "Treeview",
-            rowheight=32,
-            fieldbackground="white",
-            background="white",
-            bordercolor="#d9e1ea",
-        )
-        style.configure(
-            "Treeview.Heading",
-            padding=8,
-            background="#e6edf4",
-            font=(self.font_family, 10, "bold"),
+        self.style = ttk.Style(self.root)
+        self.style.theme_use("clam")
+        configure_ttk_styles(
+            self.style, self.theme, self.font_family, self.mono_family
         )
 
     def _shell(self):
-        sidebar = tk.Frame(self.root, background="#14263e", width=196)
-        sidebar.pack(side="left", fill="y")
-        sidebar.pack_propagate(False)
-        tk.Label(
-            sidebar,
+        self.sidebar = tk.Frame(
+            self.root, background=self.theme.sidebar, width=210
+        )
+        self.sidebar.pack(side="left", fill="y")
+        self.sidebar.pack_propagate(False)
+        self.brand_title = tk.Label(
+            self.sidebar,
             text="BMS",
             font=(self.font_family, 28, "bold"),
-            background="#14263e",
-            foreground="white",
+            background=self.theme.sidebar,
+            foreground=self.theme.sidebar_text,
             anchor="w",
-        ).pack(fill="x", padx=24, pady=(26, 0))
-        tk.Label(
-            sidebar,
+        )
+        self.brand_title.pack(fill="x", padx=24, pady=(26, 0))
+        self.brand_subtitle = tk.Label(
+            self.sidebar,
             text="LINE AUTOMATION",
             font=(self.font_family, 9),
-            background="#14263e",
-            foreground="#afc5da",
+            background=self.theme.sidebar,
+            foreground=self.theme.sidebar_muted,
             anchor="w",
-        ).pack(fill="x", padx=25, pady=(0, 28))
+        )
+        self.brand_subtitle.pack(fill="x", padx=25, pady=(0, 28))
         self.navigation = {}
         for name in PAGE_DESCRIPTIONS:
             button = tk.Button(
-                sidebar,
+                self.sidebar,
                 text=name,
                 anchor="w",
                 padx=18,
                 pady=13,
                 font=(self.font_family, 11),
-                background="#14263e",
-                foreground="#c5d4e2",
-                activebackground="#27445e",
-                activeforeground="white",
+                background=self.theme.sidebar,
+                foreground=self.theme.sidebar_text,
+                activebackground=self.theme.sidebar_active,
+                activeforeground=self.theme.sidebar_text,
                 relief="flat",
                 borderwidth=0,
                 cursor="hand2",
-                highlightthickness=0,
+                highlightthickness=2,
+                highlightbackground=self.theme.sidebar,
+                highlightcolor=self.theme.focus,
+                takefocus=True,
                 command=lambda page=name: self.show_page(page),
             )
             button.pack(fill="x", padx=12, pady=3)
             self.navigation[name] = button
-        bottom = tk.Frame(sidebar, background="#14263e")
-        bottom.pack(side="bottom", fill="x", padx=20, pady=24)
-        tk.Label(
-            bottom,
+        self.sidebar_bottom = tk.Frame(self.sidebar, background=self.theme.sidebar)
+        self.sidebar_bottom.pack(side="bottom", fill="x", padx=20, pady=24)
+        self.sidebar_caption = tk.Label(
+            self.sidebar_bottom,
             text="LOCAL DESKTOP BOT",
-            background="#14263e",
-            foreground="#8da8bf",
+            background=self.theme.sidebar,
+            foreground=self.theme.sidebar_muted,
             font=(self.font_family, 8),
             anchor="w",
-        ).pack(fill="x")
-        tk.Label(
-            bottom,
+        )
+        self.sidebar_caption.pack(fill="x")
+        self.sidebar_state = tk.Label(
+            self.sidebar_bottom,
             textvariable=self.state_text,
-            background="#14263e",
-            foreground="white",
+            background=self.theme.sidebar,
+            foreground=self.theme.sidebar_text,
             font=(self.font_family, 11, "bold"),
             anchor="w",
-        ).pack(fill="x", pady=(6, 12))
-        tk.Button(
-            bottom,
+        )
+        self.sidebar_state.pack(fill="x", pady=(6, 12))
+        self.reports_button = tk.Button(
+            self.sidebar_bottom,
             text="Open reports folder",
             command=lambda: self.open_folder("screenshots"),
             relief="flat",
-            background="#284258",
-            foreground="white",
-            activebackground="#355a74",
-            activeforeground="white",
+            background=self.theme.sidebar_active,
+            foreground=self.theme.sidebar_text,
+            activebackground=self.theme.primary,
+            activeforeground=self.theme.on_primary,
             pady=9,
             cursor="hand2",
-        ).pack(fill="x")
-        area = ttk.Frame(self.root, style="Page.TFrame", padding=24)
-        area.pack(side="left", fill="both", expand=True)
-        header = ttk.Frame(area, style="Page.TFrame")
-        header.pack(fill="x", pady=(0, 16))
-        self.title_label = ttk.Label(header, text="Dashboard", style="PageTitle.TLabel")
+            highlightthickness=2,
+            highlightbackground=self.theme.sidebar,
+            highlightcolor=self.theme.focus,
+            takefocus=True,
+        )
+        self.reports_button.pack(fill="x")
+        self.area = ttk.Frame(self.root, style="Page.TFrame", padding=24)
+        self.area.pack(side="left", fill="both", expand=True)
+        header = ttk.Frame(self.area, style="Header.TFrame")
+        header.pack(fill="x", pady=(0, 18))
+        title_area = ttk.Frame(header, style="Header.TFrame")
+        title_area.pack(side="left", fill="x", expand=True)
+        self.title_label = ttk.Label(
+            title_area, text="Dashboard", style="PageTitle.TLabel"
+        )
         self.title_label.pack(anchor="w")
         self.subtitle = ttk.Label(
-            header,
+            title_area,
             text=PAGE_DESCRIPTIONS["Dashboard"],
             style="Muted.TLabel",
-            wraplength=820,
+            wraplength=650,
         )
         self.subtitle.pack(anchor="w", pady=(5, 0))
+        header_actions = ttk.Frame(header, style="Header.TFrame")
+        header_actions.pack(side="right", padx=(16, 0))
+        self.theme_button = ttk.Button(
+            header_actions,
+            text="Light theme" if self.theme_name == "dark" else "Dark theme",
+            command=self.toggle_theme,
+        )
+        self.theme_button.pack(side="left", padx=(0, 8))
+        self.header_status = ttk.Label(
+            header_actions,
+            textvariable=self.state_text,
+            style=status_style(self.controller.state),
+        )
+        self.header_status.pack(side="left", padx=(0, 8))
+        self.header_action = ttk.Button(
+            header_actions,
+            text="Start Bot",
+            style="Primary.TButton",
+            command=self.toggle_bot,
+        )
+        self.header_action.pack(side="left")
         ttk.Label(
-            area, textvariable=self.notice, style="Muted.TLabel", wraplength=830
+            self.area,
+            textvariable=self.notice,
+            style="Muted.TLabel",
+            wraplength=850,
         ).pack(side="bottom", anchor="w", fill="x", pady=(15, 0))
-        self.content = ttk.Frame(area, style="Page.TFrame")
+        self.content = ttk.Frame(self.area, style="Page.TFrame")
         self.content.pack(fill="both", expand=True)
         self.content.rowconfigure(0, weight=1)
         self.content.columnconfigure(0, weight=1)
@@ -282,17 +251,55 @@ class ControlPanel:
     def _dashboard(self, parent):
         page = Scrollable(parent)
         page.body.configure(padding=0)
+        overview = ttk.Frame(page.body, style="Page.TFrame")
+        overview.pack(fill="x", pady=(0, 12))
+        for column in range(3):
+            overview.columnconfigure(column, weight=1, uniform="health")
+
+        def health_card(column, title, variable, detail):
+            frame = ttk.LabelFrame(
+                overview, text=title, style="Card.TLabelframe", padding=16
+            )
+            frame.grid(
+                row=0,
+                column=column,
+                sticky="nsew",
+                padx=(0 if column == 0 else 6, 0 if column == 2 else 6),
+            )
+            value = ttk.Label(
+                frame,
+                textvariable=variable,
+                style="Field.TLabel",
+                font=(self.font_family, 13, "bold"),
+                wraplength=240,
+            )
+            value.pack(anchor="w", fill="x")
+            ttk.Label(
+                frame,
+                text=detail,
+                style="Hint.TLabel",
+                wraplength=240,
+                justify="left",
+            ).pack(anchor="w", pady=(6, 0))
+            return value
+
+        self.dashboard_status = health_card(
+            0, "Bot", self.state_text, "Current local process state"
+        )
+        health_card(1, "LINE delivery", self.delivery, "Group takes priority over user")
+        health_card(2, "Login macro", self.default_macro, "Runs when login is detected")
+
         summary = ttk.LabelFrame(
-            page.body, text="Bot connection", style="Card.TLabelframe", padding=18
+            page.body, text="Connection and controls", style="Card.TLabelframe", padding=18
         )
         summary.pack(fill="x")
         row = ttk.Frame(summary, style="Card.TFrame")
-        row.pack(fill="x")
+        row.pack(fill="x", pady=(0, 12))
         ttk.Label(
             row,
-            textvariable=self.state_text,
+            text="Run the bot and keep the BMS visible for screenshots.",
             style="Field.TLabel",
-            font=(self.font_family, 18, "bold"),
+            font=(self.font_family, 11, "bold"),
         ).pack(side="left")
         self.stop_button = ttk.Button(
             row, text="Stop Bot", style="Danger.TButton", command=self.stop_bot
@@ -302,20 +309,8 @@ class ControlPanel:
             row, text="Start Bot", style="Primary.TButton", command=self.start_bot
         )
         self.start_button.pack(side="right")
-        for label, variable in [
-            ("Delivery", self.delivery),
-            ("Login macro", self.default_macro),
-        ]:
-            line = ttk.Frame(summary, style="Card.TFrame")
-            line.pack(fill="x", pady=(9, 0))
-            ttk.Label(line, text=label + ":", style="Hint.TLabel", width=14).pack(
-                side="left"
-            )
-            ttk.Label(line, textvariable=variable, style="Field.TLabel").pack(
-                side="left"
-            )
         webhook_row = ttk.Frame(summary, style="Card.TFrame")
-        webhook_row.pack(fill="x", pady=(10, 0))
+        webhook_row.pack(fill="x")
         ttk.Label(webhook_row, text="Webhook URL:", style="Hint.TLabel", width=14).pack(
             side="left"
         )
@@ -338,7 +333,7 @@ class ControlPanel:
             wraplength=800,
         ).pack(anchor="w", pady=(6, 0))
         setup = ttk.LabelFrame(
-            page.body, text="Setup checklist", padding=12, style="Card.TLabelframe"
+            page.body, text="Setup readiness", padding=12, style="Card.TLabelframe"
         )
         setup.pack(fill="x", pady=14)
         self.setup_table = ttk.Treeview(
@@ -357,7 +352,8 @@ class ControlPanel:
             self.setup_table.column(
                 key, width=width, minwidth=40, stretch=key == "detail"
             )
-        self.setup_table.tag_configure("warning", foreground="#9b6426")
+        self.setup_table.tag_configure("warning", foreground=self.theme.warning)
+        self.setup_table.tag_configure("ready", foreground=self.theme.success)
         setup_scroll = ttk.Scrollbar(
             setup, orient="vertical", command=self.setup_table.yview
         )
@@ -365,7 +361,7 @@ class ControlPanel:
         setup_scroll.pack(side="right", fill="y")
         self.setup_table.pack(side="left", fill="x", expand=True)
         toolbar = ttk.Frame(page.body, style="Page.TFrame")
-        toolbar.pack(fill="x", pady=(0, 10))
+        toolbar.pack(fill="x", pady=(0, 12))
         ttk.Button(toolbar, text="Refresh setup", command=self.refresh_setup).pack(
             side="left"
         )
@@ -378,7 +374,37 @@ class ControlPanel:
             text="Open macros folder",
             command=lambda: self.open_folder("scripts/macros"),
         ).pack(side="left")
-        ttk.Label(toolbar, text="Live log", style="Muted.TLabel").pack(side="right")
+        ttk.Label(toolbar, text="Live activity", style="SectionTitle.TLabel").pack(
+            side="right"
+        )
+        log_tools = ttk.Frame(page.body, style="Page.TFrame")
+        log_tools.pack(fill="x", pady=(0, 8))
+        ttk.Label(log_tools, text="Search", style="Muted.TLabel").pack(side="left")
+        self.log_search = ttk.Entry(
+            log_tools, textvariable=self.log_query, width=24
+        )
+        self.log_search.pack(side="left", padx=(6, 8))
+        self.log_filter_box = ttk.Combobox(
+            log_tools,
+            textvariable=self.log_filter,
+            values=("All activity", "Information", "Warnings", "Errors"),
+            state="readonly",
+            width=15,
+        )
+        self.log_filter_box.pack(side="left")
+        ttk.Checkbutton(
+            log_tools,
+            text="Follow new activity",
+            variable=self.log_autoscroll,
+        ).pack(side="left", padx=10)
+        self.clear_log_button = ttk.Button(
+            log_tools, text="Clear view", command=self.clear_log_view
+        )
+        self.clear_log_button.pack(side="right")
+        self.copy_log_button = ttk.Button(
+            log_tools, text="Copy visible", command=self.copy_log
+        )
+        self.copy_log_button.pack(side="right", padx=(0, 8))
         log_frame = ttk.Frame(page.body, style="Page.TFrame")
         log_frame.pack(fill="both", expand=True)
         scrollbar = ttk.Scrollbar(log_frame)
@@ -386,9 +412,9 @@ class ControlPanel:
             log_frame,
             height=8,
             font=(self.mono_family, 9),
-            background="#172a40",
-            foreground="#dae5ee",
-            insertbackground="white",
+            background=self.theme.log_background,
+            foreground=self.theme.log_text,
+            insertbackground=self.theme.log_text,
             relief="flat",
             padx=12,
             pady=10,
@@ -399,6 +425,11 @@ class ControlPanel:
         scrollbar.configure(command=self.log.yview)
         scrollbar.pack(side="right", fill="y")
         self.log.pack(fill="both", expand=True)
+        ttk.Label(
+            page.body, textvariable=self.log_count, style="Muted.TLabel"
+        ).pack(anchor="w", pady=(6, 0))
+        self.log_query.trace_add("write", lambda *_: self._render_log())
+        self.log_filter.trace_add("write", lambda *_: self._render_log())
         return page
 
     def macro_names(self):
@@ -421,8 +452,10 @@ class ControlPanel:
         self.subtitle.configure(text=PAGE_DESCRIPTIONS[name])
         for page, button in self.navigation.items():
             button.configure(
-                background="#294960" if page == name else "#14263e",
-                foreground="white" if page == name else "#c5d4e2",
+                background=(
+                    self.theme.sidebar_active if page == name else self.theme.sidebar
+                ),
+                foreground=self.theme.sidebar_text,
             )
         if name == "Settings" and not self.settings.dirty and not self.editors_locked:
             self.settings.reload()
@@ -436,6 +469,78 @@ class ControlPanel:
             if isinstance(widget, ttk.Notebook):
                 widget.select(1)
                 return
+
+    def toggle_bot(self):
+        if self.controller.busy:
+            self.stop_bot()
+        else:
+            self.start_bot()
+
+    def toggle_theme(self):
+        self.apply_theme("dark" if self.theme_name == "light" else "light")
+
+    def apply_theme(self, name):
+        self.theme_name = name
+        self.theme = palette(name)
+        self.root.configure(background=self.theme.background)
+        configure_ttk_styles(
+            self.style, self.theme, self.font_family, self.mono_family
+        )
+        for widget in (
+            self.sidebar,
+            self.sidebar_bottom,
+            self.brand_title,
+            self.brand_subtitle,
+            self.sidebar_caption,
+            self.sidebar_state,
+        ):
+            widget.configure(background=self.theme.sidebar)
+        self.brand_title.configure(foreground=self.theme.sidebar_text)
+        self.brand_subtitle.configure(foreground=self.theme.sidebar_muted)
+        self.sidebar_caption.configure(foreground=self.theme.sidebar_muted)
+        self.sidebar_state.configure(foreground=self.theme.sidebar_text)
+        self.reports_button.configure(
+            background=self.theme.sidebar_active,
+            foreground=self.theme.sidebar_text,
+            activebackground=self.theme.primary,
+            activeforeground=self.theme.on_primary,
+            highlightbackground=self.theme.sidebar,
+            highlightcolor=self.theme.focus,
+        )
+        for page, button in self.navigation.items():
+            active = page == self.current_page
+            button.configure(
+                background=(
+                    self.theme.sidebar_active if active else self.theme.sidebar
+                ),
+                foreground=self.theme.sidebar_text,
+                activebackground=self.theme.sidebar_active,
+                activeforeground=self.theme.sidebar_text,
+                highlightbackground=self.theme.sidebar,
+                highlightcolor=self.theme.focus,
+            )
+        for page in self.pages.values():
+            for widget in self._walk_widgets(page):
+                if isinstance(widget, tk.Canvas):
+                    widget.configure(background=self.theme.background)
+        self.log.configure(
+            background=self.theme.log_background,
+            foreground=self.theme.log_text,
+            insertbackground=self.theme.log_text,
+        )
+        self.setup_table.tag_configure("warning", foreground=self.theme.warning)
+        self.setup_table.tag_configure("ready", foreground=self.theme.success)
+        self.theme_button.configure(
+            text="Light theme" if self.theme_name == "dark" else "Dark theme"
+        )
+        self._render_log()
+        self._refresh_controls()
+
+    @staticmethod
+    def _walk_widgets(parent):
+        for child in parent.winfo_children():
+            yield child
+            yield from ControlPanel._walk_widgets(child)
 
     def set_notice(self, text):
         self.notice.set(text)
@@ -587,7 +692,7 @@ class ControlPanel:
                 "",
                 "end",
                 values=("OK" if row["ok"] else "Fix", row["name"], row["detail"]),
-                tags=() if row["ok"] else ("warning",),
+                tags=("ready",) if row["ok"] else ("warning",),
             )
         try:
             cfg = Settings.load(self.project, environ={})
@@ -641,17 +746,57 @@ class ControlPanel:
             self.show_error("Could not open folder", error)
 
     def _append_log(self, text):
+        self.log_buffer.append(text)
+        self._render_log()
+
+    def _selected_log_levels(self):
+        return {
+            "Information": {"info"},
+            "Warnings": {"warning"},
+            "Errors": {"error"},
+        }.get(self.log_filter.get())
+
+    def _render_log(self):
+        visible = self.log_buffer.visible(
+            query=self.log_query.get(), levels=self._selected_log_levels()
+        )
         self.log.configure(state="normal")
-        self.log.insert("end", text + "\n")
-        lines = int(self.log.index("end-1c").split(".")[0])
-        if lines > 800:
-            self.log.delete("1.0", f"{lines - 800}.0")
-        self.log.see("end")
+        self.log.delete("1.0", "end")
+        self.log.tag_configure("info", foreground=self.theme.log_text)
+        self.log.tag_configure("warning", foreground=self.theme.warning)
+        self.log.tag_configure("error", foreground=self.theme.danger)
+        for line in visible:
+            self.log.insert("end", line + "\n", classify_log_line(line))
+        if self.log_autoscroll.get():
+            self.log.see("end")
         self.log.configure(state="disabled")
+        total = len(self.log_buffer.lines)
+        self.log_count.set(
+            "No activity yet"
+            if total == 0
+            else f"{len(visible)} shown · {total} session line{'s' if total != 1 else ''}"
+        )
+
+    def clear_log_view(self):
+        self.log_buffer.clear()
+        self._render_log()
+        self.set_notice("The visible session log was cleared. The log file is unchanged.")
+
+    def copy_log(self):
+        text = self.log.get("1.0", "end-1c")
+        if not text:
+            self.set_notice("There is no visible activity to copy.")
+            return
+        self.root.clipboard_clear()
+        self.root.clipboard_append(text)
+        self.set_notice("Visible activity copied to the clipboard.")
 
     def _refresh_controls(self):
         busy = self.controller.busy
         self.state_text.set(STATE_NAMES.get(self.controller.state, "Stopped"))
+        state_style = status_style(self.controller.state)
+        self.header_status.configure(style=state_style)
+        self.dashboard_status.configure(style=state_style)
         self.start_button.state(["disabled"] if busy or self.working else ["!disabled"])
         self.stop_button.configure(
             text=(
@@ -663,6 +808,23 @@ class ControlPanel:
             if busy and self.controller.state != "stopping"
             else ["disabled"]
         )
+        if busy:
+            self.header_action.configure(
+                text=(
+                    "Cancel macro"
+                    if self.controller.mode != "bot"
+                    else "Stop Bot"
+                ),
+                style="Danger.TButton",
+            )
+            self.header_action.state(
+                ["disabled"]
+                if self.controller.state == "stopping" or self.working
+                else ["!disabled"]
+            )
+        else:
+            self.header_action.configure(text="Start Bot", style="Primary.TButton")
+            self.header_action.state(["disabled"] if self.working else ["!disabled"])
         self.quota_button.state(["disabled"] if self.working else ["!disabled"])
         for page in (
             getattr(self, "settings", None),

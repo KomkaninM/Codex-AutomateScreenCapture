@@ -20,6 +20,10 @@ def status_tone(state: str) -> str:
     return _STATE_TONES.get(str(state).strip().lower(), "neutral")
 
 
+def status_style(state: str) -> str:
+    return f"Status.{status_tone(state).title()}.TLabel"
+
+
 def classify_log_line(text: str) -> str:
     normalized = str(text).casefold()
     if re.search(r"\b(error|exception|traceback|failed|failure)\b", normalized):
@@ -40,3 +44,23 @@ def filter_log_lines(lines, query="", levels=None):
         if (not needle or needle in str(line).casefold())
         and (allowed is None or classify_log_line(line) in allowed)
     ]
+
+
+class LogViewBuffer:
+    def __init__(self, limit=800):
+        if int(limit) < 1:
+            raise ValueError("Log line limit must be positive.")
+        self.limit = int(limit)
+        self.lines = []
+
+    def append(self, text):
+        additions = str(text).splitlines() or [""]
+        self.lines.extend(additions)
+        if len(self.lines) > self.limit:
+            del self.lines[: len(self.lines) - self.limit]
+
+    def visible(self, query="", levels=None):
+        return filter_log_lines(self.lines, query=query, levels=levels)
+
+    def clear(self):
+        self.lines.clear()

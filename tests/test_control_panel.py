@@ -240,6 +240,35 @@ class ControlPanelTests(unittest.TestCase):
         self.pump(lambda: self.controller.stops == 1)
         self.assertEqual(self.controller.state, "stopped")
 
+    def test_persistent_header_and_theme_controls_follow_process_state(self):
+        self.assertTrue(self.app.header_status.winfo_exists())
+        self.assertEqual(self.app.header_status.cget("textvariable"), str(self.app.state_text))
+        original = self.app.theme_name
+        self.app.theme_button.invoke()
+        self.root.update()
+        self.assertNotEqual(self.app.theme_name, original)
+        self.controller.state = "online"
+        self.app._refresh_controls()
+        self.assertEqual(self.app.header_action.cget("text"), "Stop Bot")
+        self.assertEqual(self.app.header_status.cget("style"), "Status.Success.TLabel")
+
+    def test_dashboard_log_controls_filter_copy_and_clear_only_the_view(self):
+        self.app._append_log("Bot online")
+        self.app._append_log("WARNING tunnel retry")
+        self.app._append_log("ERROR delivery failed")
+        self.app.log_query.set("tunnel")
+        self.root.update()
+        self.assertIn("WARNING tunnel retry", self.app.log.get("1.0", "end"))
+        self.assertNotIn("Bot online", self.app.log.get("1.0", "end"))
+        self.app.log_query.set("")
+        self.app.log_filter.set("Errors")
+        self.root.update()
+        self.assertIn("ERROR delivery failed", self.app.log.get("1.0", "end"))
+        self.app.copy_log()
+        self.assertIn("ERROR delivery failed", self.root.clipboard_get())
+        self.app.clear_log_view()
+        self.assertEqual(self.app.log_buffer.lines, [])
+
     def test_using_macro_selects_settings_without_overwriting_unsaved_edits(self):
         self.app.settings.variables["PORT"].set("8000")
         self.app.macros.choose_default("login", "DH09D.json")

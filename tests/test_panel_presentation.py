@@ -94,6 +94,8 @@ class PanelWidgetUtilityTests(unittest.TestCase):
         self.assertEqual(module.status_tone("stopping"), "warning")
         self.assertEqual(module.status_tone("starting"), "info")
         self.assertEqual(module.status_tone("unexpected"), "neutral")
+        self.assertEqual(module.status_style("online"), "Status.Success.TLabel")
+        self.assertEqual(module.status_style("error"), "Status.Danger.TLabel")
 
     def test_log_classification_recognizes_errors_warnings_and_normal_output(self):
         module = load_module(self, "panel_widgets")
@@ -119,6 +121,23 @@ class PanelWidgetUtilityTests(unittest.TestCase):
             ["Capture accepted"],
         )
         self.assertEqual(module.filter_log_lines(lines), lines)
+
+    def test_log_view_buffer_is_bounded_filterable_and_clearable(self):
+        module = load_module(self, "panel_widgets")
+        buffer = module.LogViewBuffer(limit=3)
+        buffer.append("Bot starting")
+        buffer.append("WARNING tunnel retry")
+        buffer.append("Bot online")
+        buffer.append("ERROR send failed")
+        self.assertEqual(
+            buffer.lines,
+            ["WARNING tunnel retry", "Bot online", "ERROR send failed"],
+        )
+        self.assertEqual(
+            buffer.visible(query="bot", levels={"info"}), ["Bot online"]
+        )
+        buffer.clear()
+        self.assertEqual(buffer.lines, [])
 
 
 if __name__ == "__main__":
