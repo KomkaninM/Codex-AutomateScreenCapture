@@ -279,6 +279,55 @@ class ControlPanelTests(unittest.TestCase):
         self.assertTrue(self.app.settings.dirty)
         self.assertEqual(self.app.current_page, "Settings")
 
+    def test_settings_status_uses_saved_and_unsaved_semantic_styles(self):
+        self.app.settings.update_controls(False, False)
+        self.assertEqual(
+            self.app.settings.dirty_label.cget("style"), "Status.Success.TLabel"
+        )
+        self.app.settings.variables["PORT"].set("8000")
+        self.app.settings.update_controls(False, False)
+        self.assertEqual(
+            self.app.settings.dirty_label.cget("style"), "Status.Warning.TLabel"
+        )
+
+    def test_targets_have_scrollbars_count_and_selection_aware_actions(self):
+        targets = self.app.targets
+        self.assertTrue(targets.table_scroll.winfo_exists())
+        self.assertTrue(targets.table_xscroll.winfo_exists())
+        self.assertIn("disabled", targets.update_button.state())
+        self.assertIn("disabled", targets.remove_button.state())
+        targets.target_id.set("09D")
+        targets.target_name.set("DH09D Generator")
+        targets.target_macro.set("DH09D.json")
+        targets.add_row()
+        self.assertEqual(targets.count_text.get(), "1 target")
+        targets.table.selection_set("0")
+        targets._select()
+        targets.update_controls(False, False)
+        self.assertNotIn("disabled", targets.update_button.state())
+        self.assertNotIn("disabled", targets.remove_button.state())
+
+    def test_target_editor_reflows_between_wide_and_compact_layouts(self):
+        targets = self.app.targets
+        targets._layout_editor(900)
+        self.assertEqual(targets.editor.grid_info()["column"], 1)
+        self.assertEqual(targets.editor.grid_info()["row"], 0)
+        targets._layout_editor(700)
+        self.assertEqual(targets.editor.grid_info()["column"], 0)
+        self.assertEqual(targets.editor.grid_info()["row"], 1)
+
+    def test_macro_actions_require_a_selected_macro(self):
+        macros = self.app.macros
+        macros.table.selection_remove(*macros.table.selection())
+        macros.update_controls(False, False)
+        self.assertIn("disabled", macros.play_button.state())
+        first = macros.table.get_children()[0]
+        macros.table.selection_set(first)
+        macros._selection_changed()
+        macros.update_controls(False, False)
+        self.assertNotIn("disabled", macros.play_button.state())
+        self.assertNotIn("disabled", macros.login_button.state())
+
 
 if __name__ == "__main__":
     unittest.main()

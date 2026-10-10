@@ -139,6 +139,14 @@ class PanelWidgetUtilityTests(unittest.TestCase):
         buffer.clear()
         self.assertEqual(buffer.lines, [])
 
+    def test_responsive_mode_and_item_counts_are_consistent(self):
+        module = load_module(self, "panel_widgets")
+        self.assertEqual(module.responsive_mode(819), "compact")
+        self.assertEqual(module.responsive_mode(820), "wide")
+        self.assertEqual(module.item_count("target", 0), "0 targets")
+        self.assertEqual(module.item_count("target", 1), "1 target")
+        self.assertEqual(module.item_count("target", 2), "2 targets")
+
 
 if __name__ == "__main__":
     unittest.main()

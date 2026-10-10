@@ -354,6 +354,8 @@ class ControlPanel:
             )
         self.setup_table.tag_configure("warning", foreground=self.theme.warning)
         self.setup_table.tag_configure("ready", foreground=self.theme.success)
+        self.macros.table.tag_configure("ready", foreground=self.theme.success)
+        self.macros.table.tag_configure("invalid", foreground=self.theme.danger)
         setup_scroll = ttk.Scrollbar(
             setup, orient="vertical", command=self.setup_table.yview
         )

@@ -46,6 +46,15 @@ def filter_log_lines(lines, query="", levels=None):
     ]
 
 
+def responsive_mode(width, breakpoint=820):
+    return "compact" if int(width) < int(breakpoint) else "wide"
+
+
+def item_count(noun, count):
+    count = int(count)
+    return f"{count} {noun if count == 1 else noun + 's'}"
+
+
 class LogViewBuffer:
     def __init__(self, limit=800):
         if int(limit) < 1:
