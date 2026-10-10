@@ -118,6 +118,16 @@ FORM_SECTIONS = {
             "BMS session",
             [
                 (
+                    "BMS_USERNAME",
+                    "BMS login username",
+                    "Used by Macro Tool option 4 when creating a fixed-template macro.",
+                ),
+                (
+                    "BMS_PASSWORD",
+                    "BMS login password",
+                    "Stored only in your private .env and inserted into locally generated macros.",
+                ),
+                (
                     "LOGIN_MACRO_SCRIPT",
                     "Default login macro",
                     "Runs once when the login-page anchor is found.",
@@ -146,6 +156,16 @@ FORM_SECTIONS = {
                     "CONFIDENCE_THRESHOLD",
                     "Login anchor match threshold",
                     "0–1; default 0.8. Higher values require a closer visual match.",
+                ),
+                (
+                    "DETECTOR_INTERVAL_SEC",
+                    "Login polling interval (seconds)",
+                    "Checks for the login anchor after a macro. Default 0.5; use 0.1 for faster polling.",
+                ),
+                (
+                    "LOGIN_WAIT_SECONDS",
+                    "Maximum login wait (seconds)",
+                    "Continues immediately when the anchor disappears; timeout uses the capture fallback.",
                 ),
             ],
         ),
@@ -205,14 +225,9 @@ FORM_SECTIONS = {
                     "Metadata only; playback does not check display size or scaling.",
                 ),
                 (
-                    "DETECTOR_INTERVAL_SEC",
-                    "Legacy detector interval",
-                    "Retained for compatibility. Captures check the login anchor once.",
-                ),
-                (
-                    "LOGIN_WAIT_SECONDS",
-                    "Legacy login wait",
-                    "Retained for compatibility. There is no post-login polling.",
+                    "RECORDED_STEP_DELAY_SECONDS",
+                    "Recorded step delay (seconds)",
+                    "Every action in a newly recorded macro uses this delay. Default 0.2.",
                 ),
             ],
         ),
@@ -675,7 +690,7 @@ class MacrosPage(ttk.Frame):
         self.anchor_button.pack(anchor="w")
         instructions = ttk.Label(
             self,
-            text="Recording: F8 starts/stops and saves; F9 cancels. Playback: switch to the BMS during the five-second countdown. The app minimizes during both operations. Passwords in macros remain private local files.",
+            text="Recording: F8 starts/stops and saves; F9 cancels. Playback: switch to the BMS during the three-second countdown. The app minimizes during both operations. Passwords in macros remain private local files.",
             style="Muted.TLabel",
             wraplength=780,
         )
@@ -831,7 +846,7 @@ class HelpPage(Scrollable):
             ),
             (
                 "Macro tools",
-                "Stop the bot before recording or playing. F8 starts recording, then F8 stops and exports JSON. F9 cancels. Playback starts after five seconds so you can switch to the BMS; moving the mouse to a corner triggers the fail-safe.\n\nImports accept current macros and your old click_coord/type_text/press_key scripts. Existing filenames are preserved. The original recorded click coordinates are replayed without display consistency checks.",
+                "Stop the bot before recording or playing. F8 starts recording, then F8 stops and exports JSON. F9 cancels. Playback starts after three seconds so you can switch to the BMS; moving the mouse to a corner triggers the fail-safe.\n\nNew recordings use the configured delay for every exported action instead of reproducing the operator's timing gaps. Imports accept current macros and your old click_coord/type_text/press_key scripts. Existing filenames are preserved. The original recorded click coordinates are replayed without display consistency checks.",
             ),
         ]
         for index, (title, text) in enumerate(paragraphs):

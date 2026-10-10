@@ -104,6 +104,7 @@ def build_bot(runtime, dispatcher):
         player,
         settle_delay=cfg.settle_delay,
         wait_seconds=cfg.login_wait_seconds,
+        poll_interval=cfg.detector_interval,
     )
     workflow = Workflow(
         runtime,

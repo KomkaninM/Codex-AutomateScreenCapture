@@ -1,4 +1,4 @@
-"""Record, convert, export, and play private BMS JSON macros."""
+"""Record, generate, convert, export, and play private BMS JSON macros."""
 
 from __future__ import annotations
 
@@ -10,12 +10,52 @@ import os
 import secrets
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 from contextlib import nullcontext
+from urllib.parse import urlsplit
 
 from config import BASE_DIR, Settings, macro_name
 from macro_player import MacroPlayer, enable_dpi_awareness
 from automation_errors import AutomationTimeoutError
+
+BMS_GENERATOR_TEMPLATE = {
+    "name": "DH08C",
+    "description": "Generated template",
+    "steps": [
+        {
+            "action": "click",
+            "x": 1783,
+            "y": 1115,
+            "button": "left",
+            "delay": 0.1,
+        },
+        {"action": "text", "text": "__BMS_USERNAME__", "delay": 0.1},
+        {
+            "action": "click",
+            "x": 1803,
+            "y": 1255,
+            "button": "left",
+            "delay": 0.1,
+        },
+        {"action": "text", "text": "__BMS_PASSWORD__", "delay": 0.1},
+        {"action": "press", "key": "enter", "delay": 0.7},
+        {
+            "action": "click",
+            "x": 681,
+            "y": 116,
+            "button": "left",
+            "delay": 0.1,
+        },
+        {
+            "action": "text",
+            "text": "https://bms.invalid/generator",
+            "delay": 0.3,
+        },
+        {"action": "press", "key": "enter", "delay": 0.7},
+    ],
+    "desktop": {"width": 3000, "height": 2000},
+}
 
 
 def convert_legacy(data):
@@ -40,6 +80,48 @@ def convert_legacy(data):
         steps.append({"action": action, **step})
     result["steps"] = steps
     return result
+
+
+def build_from_template(template, name, url):
+    """Copy a private login macro and replace its label and navigation URL."""
+    if not isinstance(template, dict) or not isinstance(template.get("steps"), list):
+        raise ValueError("Template macro JSON must contain a steps array.")
+    url = url.strip() if isinstance(url, str) else ""
+    parsed = urlsplit(url)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        raise ValueError("Enter the complete http or https generator URL.")
+    result = copy.deepcopy(template)
+    navigation = next(
+        (
+            step
+            for step in reversed(result["steps"])
+            if isinstance(step, dict)
+            and step.get("action") == "text"
+            and isinstance(step.get("text"), str)
+            and step["text"].startswith(("http://", "https://"))
+        ),
+        None,
+    )
+    if navigation is None:
+        raise ValueError("The template macro does not contain a navigation URL step.")
+    result["name"] = name
+    result["description"] = "Generated on " + datetime.now().strftime(
+        "%Y-%m-%d %H:%M:%S"
+    )
+    navigation["text"] = url
+    return result
+
+
+def build_fixed_template(name, url, username, password):
+    """Build the standard eight-step generator macro with private credentials."""
+    if not username or not password:
+        raise ValueError(
+            "Set BMS_USERNAME and BMS_PASSWORD in .env before using option 4."
+        )
+    template = copy.deepcopy(BMS_GENERATOR_TEMPLATE)
+    template["steps"][1]["text"] = username
+    template["steps"][3]["text"] = password
+    return build_from_template(template, name, url)
 
 
 def save_macro(directory, name, data, *, max_seconds=35, overwrite=False):
@@ -76,7 +158,7 @@ def parser():
     record.add_argument("name", help="Output filename, e.g. DH09D.json")
     record.add_argument("--overwrite", action="store_true")
     play = modes.add_parser(
-        "play", help="Play an existing macro after a five-second countdown."
+        "play", help="Play an existing macro after a three-second countdown."
     )
     play.add_argument("name")
     convert = modes.add_parser(
@@ -87,22 +169,33 @@ def parser():
         "--source", type=Path, help="Old JSON file; omitted reads copied JSON text."
     )
     convert.add_argument("--overwrite", action="store_true")
+    template = modes.add_parser(
+        "template", help="Create a macro from the fixed BMS template."
+    )
+    template.add_argument("name", help="Output filename, e.g. DH08C.json")
+    template.add_argument("url", help="Complete BMS generator URL")
+    template.set_defaults(overwrite=False)
     return command
 
 
 def menu(command):
     print(
-        "\nBMS MACRO TOOL\n1. Record a new macro\n2. Play a saved macro\n3. Convert old JSON\n4. Exit"
+        "\nBMS MACRO TOOL\n1. Record a new macro\n2. Play a saved macro\n3. Convert old JSON\n4. Create from fixed template\n5. Exit"
     )
-    choice = input("Choose 1–4: ").strip()
-    if choice == "4":
+    choice = input("Choose 1–5: ").strip()
+    if choice == "5":
         return None
-    if choice not in ("1", "2", "3"):
-        raise ValueError("Choose 1, 2, 3, or 4.")
+    if choice not in ("1", "2", "3", "4"):
+        raise ValueError("Choose 1, 2, 3, 4, or 5.")
     name = input("Macro filename (example: DH09D.json): ").strip()
     if name and not name.endswith(".json"):
         name += ".json"
-    args = [{"1": "record", "2": "play", "3": "convert"}[choice], macro_name(name)]
+    args = [
+        {"1": "record", "2": "play", "3": "convert", "4": "template"}[
+            choice
+        ],
+        macro_name(name),
+    ]
     if choice == "3":
         source = (
             input("Old JSON file path, or leave blank after copying the JSON: ")
@@ -111,6 +204,8 @@ def menu(command):
         )
         if source:
             args += ["--source", source]
+    elif choice == "4":
+        args.append(input("Complete BMS generator URL: ").strip())
     return command.parse_args(args)
 
 
@@ -138,6 +233,10 @@ def run(args, cfg):
         data.setdefault(
             "desktop", {"width": cfg.expected_width, "height": cfg.expected_height}
         )
+    elif args.command == "template":
+        data = build_fixed_template(
+            Path(name).stem, args.url, cfg.bms_username, cfg.bms_password
+        )
     else:
         if sys.platform != "win32":
             raise RuntimeError("Recording and playback require your Windows desktop.")
@@ -155,7 +254,11 @@ def run(args, cfg):
                     f"Recorded desktop: {width} × {height} (informational). Playback uses the recorded coordinates directly."
                 )
                 data = record_macro(
-                    Path(name).stem, width, height, max_seconds=cfg.max_macro_seconds
+                    Path(name).stem,
+                    width,
+                    height,
+                    max_seconds=cfg.max_macro_seconds,
+                    step_delay=cfg.recorded_step_delay_seconds,
                 )
             else:
                 player = MacroPlayer(
@@ -164,9 +267,9 @@ def run(args, cfg):
                 )
                 player.load(name)
                 print(
-                    "Switch to the BMS. Playback starts in five seconds; move the mouse to a screen corner to abort."
+                    "Switch to the BMS. Playback starts in three seconds; move the mouse to a screen corner to abort."
                 )
-                for remaining in range(5, 0, -1):
+                for remaining in range(3, 0, -1):
                     print(remaining, flush=True)
                     time.sleep(1)
                 player.play(name)

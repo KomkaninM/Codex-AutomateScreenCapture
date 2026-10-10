@@ -2,9 +2,10 @@
 
 from enum import Enum
 import logging
+import time
 from pathlib import Path
 
-from automation_errors import AutomationError
+from automation_errors import AutomationError, AutomationTimeoutError
 
 log = logging.getLogger(__name__)
 
@@ -55,11 +56,57 @@ class VisualDetector:
 
 
 class SessionGuard:
-    def __init__(self, detector, player, *, settle_delay=2, wait_seconds=5):
+    def __init__(
+        self,
+        detector,
+        player,
+        *,
+        settle_delay=2,
+        wait_seconds=30,
+        poll_interval=0.5,
+        sleep=time.sleep,
+    ):
         self.detector = detector
         self.player = player
         self.settle_delay = settle_delay
         self.wait_seconds = wait_seconds
+        self.poll_interval = poll_interval
+        self.sleep = sleep
+
+    def _pause(self, seconds, deadline, cancel):
+        if cancel is not None and cancel.is_set():
+            raise RuntimeError("Job cancelled.")
+        if deadline is not None and time.monotonic() + seconds >= deadline:
+            raise AutomationTimeoutError(
+                "Login readiness wait would exceed the LINE reply deadline."
+            )
+        if cancel is not None:
+            if cancel.wait(seconds):
+                raise RuntimeError("Job cancelled.")
+        else:
+            self.sleep(seconds)
+
+    def _wait_for_anchor_loss(self, *, deadline=None, cancel=None):
+        stop_at = time.monotonic() + self.wait_seconds
+        if deadline is not None:
+            # Leave time for the configured settle delay and for capture to begin.
+            stop_at = min(stop_at, deadline - self.settle_delay - 1)
+        while True:
+            state = self.detector.state()
+            if state == SessionState.LOGGED_IN:
+                log.info("Login anchor disappeared; continuing automation.")
+                return True
+            if state == SessionState.UNKNOWN:
+                raise AutomationError(
+                    "BMS session state became unknown after the login macro."
+                )
+            remaining = stop_at - time.monotonic()
+            if remaining <= 0:
+                log.warning(
+                    "Login anchor is still visible when the readiness wait ended; continuing capture by configured fallback."
+                )
+                return False
+            self._pause(min(self.poll_interval, remaining), deadline, cancel)
 
     def ensure(self, default_macro, target_macro=None, *, deadline=None, cancel=None):
         state = self.detector.state()
@@ -78,4 +125,5 @@ class SessionGuard:
         }
         log.info("Login anchor detected; running %s once.", name)
         self.player.play(name, **options)
+        self._wait_for_anchor_loss(deadline=deadline, cancel=cancel)
         return True

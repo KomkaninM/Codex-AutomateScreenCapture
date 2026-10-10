@@ -1,17 +1,19 @@
 import json
 import io
+import copy
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
-from contextlib import contextmanager, redirect_stdout
+from contextlib import contextmanager, nullcontext, redirect_stdout
 from enum import Enum
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
+import macro_tool
 from macro_player import MacroPlayer
 from macro_recorder import RecordedMacro, translate_key, record_macro
-from macro_tool import convert_legacy, save_macro, run
+from macro_tool import convert_legacy, menu, parser, save_macro, run
 from config import Settings
 from launcher import bootstrap
 
@@ -31,6 +33,143 @@ class MacroToolTests(unittest.TestCase):
             clipboard=lambda: "อาคาร status",
             name="test",
         )
+
+    def test_template_builder_changes_only_name_description_and_navigation_url(self):
+        template = {
+            "name": "Private login template",
+            "description": "Existing description",
+            "steps": [
+                {"action": "text", "text": "private operator text", "delay": 0.1},
+                {
+                    "action": "text",
+                    "text": "https://old.example.invalid/generator",
+                    "delay": 0.3,
+                },
+                {"action": "press", "key": "enter", "delay": 0.7},
+            ],
+            "desktop": {"width": 3000, "height": 2000},
+        }
+        original = copy.deepcopy(template)
+        builder = getattr(macro_tool, "build_from_template", None)
+        self.assertIsNotNone(builder, "macro_tool must provide build_from_template")
+
+        generated = builder(
+            template,
+            "DH08C",
+            "https://10.121.48.14/generator/DH08C",
+        )
+
+        self.assertEqual(template, original)
+        self.assertEqual(generated["name"], "DH08C")
+        self.assertRegex(
+            generated["description"], r"^Generated on \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$"
+        )
+        self.assertEqual(generated["steps"][0], template["steps"][0])
+        self.assertEqual(
+            generated["steps"][1],
+            {
+                "action": "text",
+                "text": "https://10.121.48.14/generator/DH08C",
+                "delay": 0.3,
+            },
+        )
+        self.assertEqual(generated["steps"][2], template["steps"][2])
+        self.assertEqual(generated["desktop"], template["desktop"])
+
+    def test_template_builder_rejects_bad_url_or_template_without_navigation(self):
+        builder = getattr(macro_tool, "build_from_template", None)
+        self.assertIsNotNone(builder, "macro_tool must provide build_from_template")
+        template = {
+            "steps": [
+                {"action": "text", "text": "private operator text", "delay": 0.1}
+            ]
+        }
+        with self.assertRaisesRegex(ValueError, "complete http"):
+            builder(template, "DH08C", "not a URL")
+        with self.assertRaisesRegex(ValueError, "navigation URL"):
+            builder(template, "DH08C", "https://10.121.48.14/generator/DH08C")
+
+    def test_template_menu_collects_only_name_and_complete_url(self):
+        url = "https://10.121.48.14/generator/DH08C"
+        with patch(
+            "builtins.input", side_effect=["4", "DH08C", url]
+        ), redirect_stdout(io.StringIO()):
+            args = menu(parser())
+        self.assertEqual(args.command, "template")
+        self.assertEqual(args.name, "DH08C.json")
+        self.assertEqual(args.url, url)
+
+    def test_template_command_uses_fixed_steps_and_private_credentials(self):
+        cfg = Settings(
+            project_dir=self.root,
+            default_login_macro="missing.json",
+            bms_username="operator",
+            bms_password="private-password",
+        )
+        url = (
+            "https://10.121.48.14/#%2FRYG2-SVBMS%2FGraphics%2FElectrical%2F"
+            "Individual%2FRYG2%20-%20GEN%2FGEN-IT-DH08-C-RYG2A-R1"
+        )
+        args = SimpleNamespace(
+            command="template",
+            name="DH08C.json",
+            url=url,
+            overwrite=False,
+        )
+
+        with redirect_stdout(io.StringIO()):
+            run(args, cfg)
+
+        generated = json.loads((cfg.macros_dir / "DH08C.json").read_text())
+        self.assertEqual(generated["name"], "DH08C")
+        self.assertRegex(
+            generated["description"], r"^Generated on \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$"
+        )
+        self.assertEqual(
+            generated["steps"],
+            [
+                {
+                    "action": "click",
+                    "x": 1783,
+                    "y": 1115,
+                    "button": "left",
+                    "delay": 0.1,
+                },
+                {"action": "text", "text": "operator", "delay": 0.1},
+                {
+                    "action": "click",
+                    "x": 1803,
+                    "y": 1255,
+                    "button": "left",
+                    "delay": 0.1,
+                },
+                {"action": "text", "text": "private-password", "delay": 0.1},
+                {"action": "press", "key": "enter", "delay": 0.7},
+                {
+                    "action": "click",
+                    "x": 681,
+                    "y": 116,
+                    "button": "left",
+                    "delay": 0.1,
+                },
+                {"action": "text", "text": url, "delay": 0.3},
+                {"action": "press", "key": "enter", "delay": 0.7},
+            ],
+        )
+        self.assertEqual(generated["desktop"], {"width": 3000, "height": 2000})
+
+    def test_template_command_explains_missing_private_credentials(self):
+        cfg = Settings(project_dir=self.root)
+        args = SimpleNamespace(
+            command="template",
+            name="DH08C.json",
+            url="https://10.121.48.14/generator/DH08C",
+            overwrite=False,
+        )
+
+        with self.assertRaisesRegex(ValueError, "BMS_USERNAME.*BMS_PASSWORD"):
+            run(args, cfg)
+        self.assertFalse((cfg.macros_dir / "DH08C.json").exists())
 
     def test_legacy_conversion_preserves_coordinates_text_and_post_delays(self):
         source = {
@@ -71,7 +210,7 @@ class MacroToolTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             convert_legacy({"steps": [{"action": "shell", "command": "bad"}]})
 
-    def test_recording_merges_unicode_text_and_preserves_action_gaps(self):
+    def test_recording_merges_unicode_text_and_uses_uniform_step_delays(self):
         rec = self.recorder()
         rec.start()
         self.now = 1.0
@@ -90,9 +229,40 @@ class MacroToolTests(unittest.TestCase):
         self.assertEqual([s["action"] for s in steps], ["click", "text", "press"])
         self.assertEqual(steps[1]["text"], "Hiอ")
         self.assertAlmostEqual(steps[0]["delay"], 0.2)
-        self.assertAlmostEqual(steps[1]["delay"], 0.6)
-        self.assertAlmostEqual(steps[2]["delay"], 0.3)
+        self.assertAlmostEqual(steps[1]["delay"], 0.2)
+        self.assertAlmostEqual(steps[2]["delay"], 0.2)
         self.assertEqual(rec.document()["desktop"], {"width": 3000, "height": 2000})
+
+    def test_recording_uses_configured_delay_for_every_exported_step(self):
+        rec = RecordedMacro(3000, 2000, clock=lambda: self.now, step_delay=0.1)
+        rec.start()
+        rec.click(10, 10, "left")
+        self.now = 5
+        rec.key_press("enter")
+        self.now = 9
+        rec.stop()
+
+        self.assertEqual(
+            [step["delay"] for step in rec.document()["steps"]], [0.1, 0.1]
+        )
+
+    def test_standalone_playback_uses_three_second_countdown(self):
+        cfg = Settings(project_dir=self.root)
+        args = SimpleNamespace(command="play", name="a.json")
+        player = Mock()
+        output = io.StringIO()
+
+        server = SimpleNamespace(single_instance=lambda project: nullcontext())
+        with patch.dict("sys.modules", {"server": server}), patch(
+            "macro_tool.sys.platform", "win32"
+        ), patch("macro_tool.enable_dpi_awareness"), patch(
+            "macro_tool.MacroPlayer", return_value=player
+        ), patch("macro_tool.time.sleep") as sleep, redirect_stdout(output):
+            run(args, cfg)
+
+        self.assertEqual([call.args[0] for call in sleep.call_args_list], [1, 1, 1])
+        self.assertIn("three seconds", output.getvalue())
+        player.play.assert_called_once_with("a.json")
 
     def test_ctrl_v_records_clipboard_contents_for_fast_paste_playback(self):
         rec = self.recorder()

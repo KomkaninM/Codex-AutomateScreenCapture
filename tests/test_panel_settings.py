@@ -9,6 +9,44 @@ from panel_settings import ProjectStore, StaleConfiguration
 
 
 class PanelSettingsTests(unittest.TestCase):
+    def test_gui_manages_new_bms_and_timing_settings(self):
+        from panel_pages import FORM_SECTIONS
+        from panel_settings import ENV_FIELDS, SECRET_FIELDS
+
+        form_fields = {
+            field[0]
+            for groups in FORM_SECTIONS.values()
+            for _, fields in groups
+            for field in fields
+        }
+        for key in (
+            "BMS_USERNAME",
+            "BMS_PASSWORD",
+            "DETECTOR_INTERVAL_SEC",
+            "LOGIN_WAIT_SECONDS",
+            "RECORDED_STEP_DELAY_SECONDS",
+        ):
+            self.assertIn(key, ENV_FIELDS)
+            self.assertIn(key, form_fields)
+        self.assertIn("BMS_PASSWORD", SECRET_FIELDS)
+
+        values, version = self.store.load_settings()
+        self.store.save_settings(
+            values
+            | {
+                "BMS_USERNAME": "operator",
+                "BMS_PASSWORD": "private-password",
+                "DETECTOR_INTERVAL_SEC": "0.1",
+                "RECORDED_STEP_DELAY_SECONDS": "0.2",
+            },
+            version,
+        )
+        cfg = Settings.load(self.root, environ={})
+        self.assertEqual(cfg.bms_username, "operator")
+        self.assertEqual(cfg.bms_password, "private-password")
+        self.assertEqual(cfg.detector_interval, 0.1)
+        self.assertEqual(cfg.recorded_step_delay_seconds, 0.2)
+
     def test_replace_failure_preserves_original_settings(self):
         values, version = self.store.load_settings()
         original = (self.root / ".env").read_bytes()
