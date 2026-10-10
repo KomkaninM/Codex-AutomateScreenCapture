@@ -19,6 +19,44 @@ from config import BASE_DIR, Settings, macro_name
 from macro_player import MacroPlayer, enable_dpi_awareness
 from automation_errors import AutomationTimeoutError
 
+BMS_GENERATOR_TEMPLATE = {
+    "name": "DH08C",
+    "description": "Generated template",
+    "steps": [
+        {
+            "action": "click",
+            "x": 1783,
+            "y": 1115,
+            "button": "left",
+            "delay": 0.1,
+        },
+        {"action": "text", "text": "__BMS_USERNAME__", "delay": 0.1},
+        {
+            "action": "click",
+            "x": 1803,
+            "y": 1255,
+            "button": "left",
+            "delay": 0.1,
+        },
+        {"action": "text", "text": "__BMS_PASSWORD__", "delay": 0.1},
+        {"action": "press", "key": "enter", "delay": 0.7},
+        {
+            "action": "click",
+            "x": 681,
+            "y": 116,
+            "button": "left",
+            "delay": 0.1,
+        },
+        {
+            "action": "text",
+            "text": "https://bms.invalid/generator",
+            "delay": 0.3,
+        },
+        {"action": "press", "key": "enter", "delay": 0.7},
+    ],
+    "desktop": {"width": 3000, "height": 2000},
+}
+
 
 def convert_legacy(data):
     if isinstance(data, list):
@@ -74,6 +112,18 @@ def build_from_template(template, name, url):
     return result
 
 
+def build_fixed_template(name, url, username, password):
+    """Build the standard eight-step generator macro with private credentials."""
+    if not username or not password:
+        raise ValueError(
+            "Set BMS_USERNAME and BMS_PASSWORD in .env before using option 4."
+        )
+    template = copy.deepcopy(BMS_GENERATOR_TEMPLATE)
+    template["steps"][1]["text"] = username
+    template["steps"][3]["text"] = password
+    return build_from_template(template, name, url)
+
+
 def save_macro(directory, name, data, *, max_seconds=35, overwrite=False):
     directory = Path(directory).resolve()
     destination = directory / macro_name(name)
@@ -120,7 +170,7 @@ def parser():
     )
     convert.add_argument("--overwrite", action="store_true")
     template = modes.add_parser(
-        "template", help="Copy the configured login macro with a new name and URL."
+        "template", help="Create a macro from the fixed BMS template."
     )
     template.add_argument("name", help="Output filename, e.g. DH08C.json")
     template.add_argument("url", help="Complete BMS generator URL")
@@ -130,7 +180,7 @@ def parser():
 
 def menu(command):
     print(
-        "\nBMS MACRO TOOL\n1. Record a new macro\n2. Play a saved macro\n3. Convert old JSON\n4. Create from login template\n5. Exit"
+        "\nBMS MACRO TOOL\n1. Record a new macro\n2. Play a saved macro\n3. Convert old JSON\n4. Create from fixed template\n5. Exit"
     )
     choice = input("Choose 1–5: ").strip()
     if choice == "5":
@@ -184,22 +234,9 @@ def run(args, cfg):
             "desktop", {"width": cfg.expected_width, "height": cfg.expected_height}
         )
     elif args.command == "template":
-        macro_directory = cfg.macros_dir.resolve()
-        template_path = (
-            macro_directory / macro_name(cfg.default_login_macro)
-        ).resolve()
-        if template_path.parent != macro_directory:
-            raise ValueError("Macro path escapes the macro directory.")
-        if not template_path.is_file():
-            raise FileNotFoundError(
-                "Configured login template was not found: " + template_path.name
-            )
-        if template_path.stat().st_size > 1_000_000:
-            raise ValueError("Configured login template exceeds 1 MB.")
-        template = convert_legacy(
-            json.loads(template_path.read_text(encoding="utf-8-sig"))
+        data = build_fixed_template(
+            Path(name).stem, args.url, cfg.bms_username, cfg.bms_password
         )
-        data = build_from_template(template, Path(name).stem, args.url)
     else:
         if sys.platform != "win32":
             raise RuntimeError("Recording and playback require your Windows desktop.")

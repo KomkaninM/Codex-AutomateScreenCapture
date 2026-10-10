@@ -70,6 +70,8 @@ class Settings:
     ngrok_domain: str = ""
     ngrok_exe_path: str = ""
     ngrok_authtoken: str = ""
+    bms_username: str = ""
+    bms_password: str = ""
     default_login_macro: str = "login_bms.json"
     logout_macro: str = "logout.json"
     auto_logout: bool = False
@@ -139,6 +141,8 @@ class Settings:
             ngrok_domain=urlsplit(url).hostname or "",
             ngrok_exe_path=val("NGROK_EXE_PATH"),
             ngrok_authtoken=val("NGROK_AUTHTOKEN").strip(),
+            bms_username=val("BMS_USERNAME"),
+            bms_password=val("BMS_PASSWORD"),
             default_login_macro=macro_name(
                 val("LOGIN_MACRO_SCRIPT", "login_bms.json", "DEFAULT_LOGIN_MACRO")
             ),

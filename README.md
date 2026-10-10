@@ -170,7 +170,7 @@ To play, choose **2 — Play**, enter the filename, and switch to the correct BM
 
 To convert your old DH09D macro on your PC, copy its **complete JSON** from the chat, choose **3 — Convert old JSON**, enter `DH09D.json`, and leave the source-path prompt blank to read the copied JSON. Alternatively select a local JSON file. Conversion preserves coordinates, text, the navigation URL, and every `post_delay`; `default_post_delay` supplies missing delays. The output uses `click`, `text`, `press`, and `delay` and records the configured desktop dimensions. Existing files are preserved by default; choose another filename or explicitly use `--overwrite` from the command line.
 
-To create another macro with the same login sequence, first make sure `LOGIN_MACRO_SCRIPT` names your working private login macro. Choose **4 — Create from login template**, enter the new macro name such as `DH08C`, then paste the complete BMS generator URL. The tool copies the configured login macro and changes only its name, generated description, and final HTTP/HTTPS text step. Coordinates, login text, delays, and desktop metadata stay unchanged. The original template and any existing destination file are preserved.
+To create another macro with the standard generator login sequence, set `BMS_USERNAME` and `BMS_PASSWORD` once in your private `.env`, then choose **4 — Create from fixed template**. Enter the new macro name such as `DH08C` and paste the complete BMS generator URL. The tool uses the built-in eight-step template and does not read `LOGIN_MACRO_SCRIPT`. The fixed coordinates, delays, and 3000×2000 desktop metadata stay unchanged; your private credentials are inserted from `.env`, and any existing destination file is preserved.
 
 The supplied DH09D script contains a complete login followed by navigation. Start standalone playback on the login page. To use it for session-timeout recovery, set `LOGIN_MACRO_SCRIPT=DH09D.json` in `.env` or send `set-login DH09D.json`, then use untargeted `capture`. Its URL was preserved exactly and contains `DH09-C`, despite the DH09D filename. Recorded/login scripts with credentials are ignored by Git and are not included in the GitHub ZIP; create/import them locally using the tool.
 
@@ -182,7 +182,7 @@ For direct Python execution after installing requirements:
 .\.venv-launcher\Scripts\python.exe macro_tool.py convert DH09D.json --source "C:\path\old_DH09D.json"
 # Read complete JSON copied to the clipboard:
 .\.venv-launcher\Scripts\python.exe macro_tool.py convert DH09D.json
-# Copy LOGIN_MACRO_SCRIPT and replace its name and navigation URL:
+# Use the fixed template and replace its name and navigation URL:
 .\.venv-launcher\Scripts\python.exe macro_tool.py template DH08C "https://10.121.48.14/complete-generator-url"
 ```
 

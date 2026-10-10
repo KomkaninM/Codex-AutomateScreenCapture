@@ -65,6 +65,16 @@ class CoreTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             Settings.load(self.root, environ={})
 
+    def test_bms_credentials_load_from_private_environment(self):
+        (self.root / ".env").write_text(
+            "BMS_USERNAME=operator\nBMS_PASSWORD=private-password\n"
+        )
+
+        cfg = Settings.load(self.root, environ={})
+
+        self.assertEqual(getattr(cfg, "bms_username", None), "operator")
+        self.assertEqual(getattr(cfg, "bms_password", None), "private-password")
+
     def test_runtime_persistence_and_path_confinement(self):
         self.runtime.set_login("DH07A.json")
         self.assertIn("LOGIN_MACRO_SCRIPT", (self.root / ".env").read_text())

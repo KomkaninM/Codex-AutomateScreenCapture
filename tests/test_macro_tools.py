@@ -99,28 +99,21 @@ class MacroToolTests(unittest.TestCase):
         self.assertEqual(args.name, "DH08C.json")
         self.assertEqual(args.url, url)
 
-    def test_template_command_copies_configured_login_macro_and_saves_new_file(self):
-        cfg = Settings(project_dir=self.root, default_login_macro="base.json")
-        template = {
-            "name": "Base",
-            "description": "Private template",
-            "steps": [
-                {"action": "click", "x": 10, "y": 20, "delay": 0.1},
-                {"action": "text", "text": "private operator text", "delay": 0.1},
-                {
-                    "action": "text",
-                    "text": "https://old.example.invalid/generator",
-                    "delay": 0.3,
-                },
-                {"action": "press", "key": "enter", "delay": 0.7},
-            ],
-            "desktop": {"width": 3000, "height": 2000},
-        }
-        save_macro(cfg.macros_dir, "base.json", template)
+    def test_template_command_uses_fixed_steps_and_private_credentials(self):
+        cfg = Settings(
+            project_dir=self.root,
+            default_login_macro="missing.json",
+            bms_username="operator",
+            bms_password="private-password",
+        )
+        url = (
+            "https://10.121.48.14/#%2FRYG2-SVBMS%2FGraphics%2FElectrical%2F"
+            "Individual%2FRYG2%20-%20GEN%2FGEN-IT-DH08-C-RYG2A-R1"
+        )
         args = SimpleNamespace(
             command="template",
             name="DH08C.json",
-            url="https://10.121.48.14/generator/DH08C",
+            url=url,
             overwrite=False,
         )
 
@@ -129,34 +122,44 @@ class MacroToolTests(unittest.TestCase):
 
         generated = json.loads((cfg.macros_dir / "DH08C.json").read_text())
         self.assertEqual(generated["name"], "DH08C")
-        self.assertEqual(
-            generated["steps"][2]["text"],
-            "https://10.121.48.14/generator/DH08C",
+        self.assertRegex(
+            generated["description"], r"^Generated on \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$"
         )
         self.assertEqual(
-            json.loads((cfg.macros_dir / "base.json").read_text()), template
-        )
-
-    def test_template_command_rejects_login_template_symlink_outside_macro_folder(self):
-        cfg = Settings(project_dir=self.root, default_login_macro="base.json")
-        cfg.macros_dir.mkdir(parents=True)
-        outside = self.root / "private-outside.json"
-        outside.write_text(
-            json.dumps(
+            generated["steps"],
+            [
                 {
-                    "steps": [
-                        {
-                            "action": "text",
-                            "text": "https://old.example.invalid/generator",
-                        }
-                    ]
-                }
-            )
+                    "action": "click",
+                    "x": 1783,
+                    "y": 1115,
+                    "button": "left",
+                    "delay": 0.1,
+                },
+                {"action": "text", "text": "operator", "delay": 0.1},
+                {
+                    "action": "click",
+                    "x": 1803,
+                    "y": 1255,
+                    "button": "left",
+                    "delay": 0.1,
+                },
+                {"action": "text", "text": "private-password", "delay": 0.1},
+                {"action": "press", "key": "enter", "delay": 0.7},
+                {
+                    "action": "click",
+                    "x": 681,
+                    "y": 116,
+                    "button": "left",
+                    "delay": 0.1,
+                },
+                {"action": "text", "text": url, "delay": 0.3},
+                {"action": "press", "key": "enter", "delay": 0.7},
+            ],
         )
-        try:
-            (cfg.macros_dir / "base.json").symlink_to(outside)
-        except OSError as error:
-            self.skipTest(f"Symlinks unavailable: {error}")
+        self.assertEqual(generated["desktop"], {"width": 3000, "height": 2000})
+
+    def test_template_command_explains_missing_private_credentials(self):
+        cfg = Settings(project_dir=self.root)
         args = SimpleNamespace(
             command="template",
             name="DH08C.json",
@@ -164,7 +167,7 @@ class MacroToolTests(unittest.TestCase):
             overwrite=False,
         )
 
-        with self.assertRaisesRegex(ValueError, "escapes the macro directory"):
+        with self.assertRaisesRegex(ValueError, "BMS_USERNAME.*BMS_PASSWORD"):
             run(args, cfg)
         self.assertFalse((cfg.macros_dir / "DH08C.json").exists())
 
