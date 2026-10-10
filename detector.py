@@ -63,12 +63,14 @@ class SessionGuard:
         *,
         settle_delay=2,
         wait_seconds=30,
+        poll_interval=0.5,
         sleep=time.sleep,
     ):
         self.detector = detector
         self.player = player
         self.settle_delay = settle_delay
         self.wait_seconds = wait_seconds
+        self.poll_interval = poll_interval
         self.sleep = sleep
 
     def _pause(self, seconds, deadline, cancel):
@@ -104,7 +106,7 @@ class SessionGuard:
                     "Login anchor is still visible when the readiness wait ended; continuing capture by configured fallback."
                 )
                 return False
-            self._pause(min(0.5, remaining), deadline, cancel)
+            self._pause(min(self.poll_interval, remaining), deadline, cancel)
 
     def ensure(self, default_macro, target_macro=None, *, deadline=None, cancel=None):
         state = self.detector.state()

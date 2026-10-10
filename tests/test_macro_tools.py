@@ -5,7 +5,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
-from contextlib import contextmanager, redirect_stdout
+from contextlib import contextmanager, nullcontext, redirect_stdout
 from enum import Enum
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -210,7 +210,7 @@ class MacroToolTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             convert_legacy({"steps": [{"action": "shell", "command": "bad"}]})
 
-    def test_recording_merges_unicode_text_and_preserves_action_gaps(self):
+    def test_recording_merges_unicode_text_and_uses_uniform_step_delays(self):
         rec = self.recorder()
         rec.start()
         self.now = 1.0
@@ -229,9 +229,40 @@ class MacroToolTests(unittest.TestCase):
         self.assertEqual([s["action"] for s in steps], ["click", "text", "press"])
         self.assertEqual(steps[1]["text"], "Hiอ")
         self.assertAlmostEqual(steps[0]["delay"], 0.2)
-        self.assertAlmostEqual(steps[1]["delay"], 0.6)
-        self.assertAlmostEqual(steps[2]["delay"], 0.3)
+        self.assertAlmostEqual(steps[1]["delay"], 0.2)
+        self.assertAlmostEqual(steps[2]["delay"], 0.2)
         self.assertEqual(rec.document()["desktop"], {"width": 3000, "height": 2000})
+
+    def test_recording_uses_configured_delay_for_every_exported_step(self):
+        rec = RecordedMacro(3000, 2000, clock=lambda: self.now, step_delay=0.1)
+        rec.start()
+        rec.click(10, 10, "left")
+        self.now = 5
+        rec.key_press("enter")
+        self.now = 9
+        rec.stop()
+
+        self.assertEqual(
+            [step["delay"] for step in rec.document()["steps"]], [0.1, 0.1]
+        )
+
+    def test_standalone_playback_uses_three_second_countdown(self):
+        cfg = Settings(project_dir=self.root)
+        args = SimpleNamespace(command="play", name="a.json")
+        player = Mock()
+        output = io.StringIO()
+
+        server = SimpleNamespace(single_instance=lambda project: nullcontext())
+        with patch.dict("sys.modules", {"server": server}), patch(
+            "macro_tool.sys.platform", "win32"
+        ), patch("macro_tool.enable_dpi_awareness"), patch(
+            "macro_tool.MacroPlayer", return_value=player
+        ), patch("macro_tool.time.sleep") as sleep, redirect_stdout(output):
+            run(args, cfg)
+
+        self.assertEqual([call.args[0] for call in sleep.call_args_list], [1, 1, 1])
+        self.assertIn("three seconds", output.getvalue())
+        player.play.assert_called_once_with("a.json")
 
     def test_ctrl_v_records_clipboard_contents_for_fast_paste_playback(self):
         rec = self.recorder()

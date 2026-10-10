@@ -78,6 +78,23 @@ class CoreTests(unittest.TestCase):
     def test_login_anchor_wait_defaults_to_thirty_seconds(self):
         self.assertEqual(Settings.load(self.root, environ={}).login_wait_seconds, 30)
 
+    def test_login_poll_and_recorded_step_delay_load_and_validate(self):
+        (self.root / ".env").write_text(
+            "DETECTOR_INTERVAL_SEC=0.1\nRECORDED_STEP_DELAY_SECONDS=0.2\n"
+        )
+        cfg = Settings.load(self.root, environ={})
+        self.assertEqual(cfg.detector_interval, 0.1)
+        self.assertEqual(getattr(cfg, "recorded_step_delay_seconds", None), 0.2)
+
+        for text in (
+            "DETECTOR_INTERVAL_SEC=0\n",
+            "RECORDED_STEP_DELAY_SECONDS=-0.1\n",
+        ):
+            with self.subTest(text=text):
+                (self.root / ".env").write_text(text)
+                with self.assertRaises(ValueError):
+                    Settings.load(self.root, environ={})
+
     def test_runtime_persistence_and_path_confinement(self):
         self.runtime.set_login("DH07A.json")
         self.assertIn("LOGIN_MACRO_SCRIPT", (self.root / ".env").read_text())
@@ -242,12 +259,18 @@ class CoreTests(unittest.TestCase):
         )
         player = Mock()
         sleep = Mock()
-        guard = SessionGuard(detector, player, wait_seconds=30, sleep=sleep)
+        guard = SessionGuard(
+            detector,
+            player,
+            wait_seconds=30,
+            poll_interval=0.1,
+            sleep=sleep,
+        )
 
         self.assertTrue(guard.ensure("login.json"))
 
         player.play.assert_called_once_with("login.json")
-        sleep.assert_called_once_with(0.5)
+        sleep.assert_called_once_with(0.1)
         self.assertEqual(detector.state.call_count, 3)
 
     def test_login_guard_continues_when_anchor_wait_times_out(self):

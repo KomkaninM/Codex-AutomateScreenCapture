@@ -158,7 +158,7 @@ def parser():
     record.add_argument("name", help="Output filename, e.g. DH09D.json")
     record.add_argument("--overwrite", action="store_true")
     play = modes.add_parser(
-        "play", help="Play an existing macro after a five-second countdown."
+        "play", help="Play an existing macro after a three-second countdown."
     )
     play.add_argument("name")
     convert = modes.add_parser(
@@ -254,7 +254,11 @@ def run(args, cfg):
                     f"Recorded desktop: {width} × {height} (informational). Playback uses the recorded coordinates directly."
                 )
                 data = record_macro(
-                    Path(name).stem, width, height, max_seconds=cfg.max_macro_seconds
+                    Path(name).stem,
+                    width,
+                    height,
+                    max_seconds=cfg.max_macro_seconds,
+                    step_delay=cfg.recorded_step_delay_seconds,
                 )
             else:
                 player = MacroPlayer(
@@ -263,9 +267,9 @@ def run(args, cfg):
                 )
                 player.load(name)
                 print(
-                    "Switch to the BMS. Playback starts in five seconds; move the mouse to a screen corner to abort."
+                    "Switch to the BMS. Playback starts in three seconds; move the mouse to a screen corner to abort."
                 )
-                for remaining in range(5, 0, -1):
+                for remaining in range(3, 0, -1):
                     print(remaining, flush=True)
                     time.sleep(1)
                 player.play(name)

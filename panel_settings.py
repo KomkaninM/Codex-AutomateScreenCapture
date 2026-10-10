@@ -30,6 +30,8 @@ ENV_FIELDS = {
     "NGROK_AUTHTOKEN": "ngrok_authtoken",
     "NGROK_DOMAIN": "ngrok_domain",
     "NGROK_EXE_PATH": "ngrok_exe_path",
+    "BMS_USERNAME": "bms_username",
+    "BMS_PASSWORD": "bms_password",
     "PORT": "port",
     "LOGIN_MACRO_SCRIPT": "default_login_macro",
     "LOGOUT_MACRO_SCRIPT": "logout_macro",
@@ -44,6 +46,7 @@ ENV_FIELDS = {
     "INTERNAL_API_TOKEN": "internal_api_token",
     "DETECTOR_INTERVAL_SEC": "detector_interval",
     "LOGIN_WAIT_SECONDS": "login_wait_seconds",
+    "RECORDED_STEP_DELAY_SECONDS": "recorded_step_delay_seconds",
     "DESKTOP_WIDTH": "expected_width",
     "DESKTOP_HEIGHT": "expected_height",
 }
@@ -52,6 +55,7 @@ SECRET_FIELDS = {
     "LINE_CHANNEL_SECRET",
     "NGROK_AUTHTOKEN",
     "INTERNAL_API_TOKEN",
+    "BMS_PASSWORD",
 }
 ALIASES = {
     "CHANNEL_ACCESS_TOKEN": "LINE_CHANNEL_ACCESS_TOKEN",
