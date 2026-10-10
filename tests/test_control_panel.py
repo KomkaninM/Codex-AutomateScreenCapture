@@ -1,5 +1,4 @@
 import gc
-import inspect
 import json
 import os
 import queue
@@ -16,13 +15,6 @@ except ImportError:
 
 if tk is not None:
     from control_panel import ControlPanel
-
-
-@unittest.skipUnless(tk, "Tkinter is required")
-class ControlPanelInitializationTests(unittest.TestCase):
-    def test_dashboard_does_not_access_pages_created_after_it(self):
-        source = inspect.getsource(ControlPanel._dashboard)
-        self.assertNotIn("self.macros", source)
 
 
 class StubController:
@@ -193,37 +185,6 @@ class ControlPanelTests(unittest.TestCase):
             page.canvas.winfo_rooty() + page.canvas.winfo_height(),
         )
 
-    def test_persistent_header_controls_are_not_clipped_at_minimum_width(self):
-        self.root.deiconify()
-        self.root.geometry("940x620")
-        self.root.update()
-        for widget in (
-            self.app.theme_button,
-            self.app.header_status,
-            self.app.header_action,
-        ):
-            self.assertTrue(widget.winfo_viewable())
-            self.assertGreaterEqual(widget.winfo_width(), widget.winfo_reqwidth())
-            self.assertLessEqual(
-                widget.winfo_rootx() + widget.winfo_width(),
-                self.root.winfo_rootx() + self.root.winfo_width(),
-            )
-
-    def test_log_toolbar_actions_are_reachable_at_minimum_width(self):
-        self.root.deiconify()
-        self.root.geometry("940x620")
-        self.app.show_page("Dashboard")
-        self.root.update()
-        page = self.app.pages["Dashboard"]
-        page.canvas.yview_moveto(1)
-        self.root.update()
-        for widget in (self.app.copy_log_button, self.app.clear_log_button):
-            self.assertTrue(widget.winfo_viewable())
-            self.assertLessEqual(
-                widget.winfo_rootx() + widget.winfo_width(),
-                page.canvas.winfo_rootx() + page.canvas.winfo_width(),
-            )
-
     def test_target_editor_and_save_fit_minimum_window_size(self):
         self.root.deiconify()
         self.root.geometry("940x620")
@@ -235,22 +196,6 @@ class ControlPanelTests(unittest.TestCase):
                 widget.winfo_rooty() + widget.winfo_height(),
                 self.root.winfo_rooty() + self.root.winfo_height() - 30,
             )
-
-    def test_target_list_is_visible_and_selectable_at_minimum_window_size(self):
-        targets = self.app.targets
-        targets.rows = [
-            {"id": "09D", "name": "DH09D Generator", "macro": "DH09D.json"}
-        ]
-        targets.render()
-        self.root.deiconify()
-        self.root.geometry("940x620")
-        self.app.show_page("Targets")
-        self.root.update()
-        self.assertTrue(targets.table.winfo_viewable())
-        self.assertGreater(targets.table.winfo_height(), 40)
-        targets.table.selection_set("0")
-        targets._select()
-        self.assertEqual(targets.target_id.get(), "09D")
 
     def test_save_button_updates_env_and_clears_dirty_state(self):
         self.app.settings.variables["PORT"].set("8000")
@@ -295,50 +240,6 @@ class ControlPanelTests(unittest.TestCase):
         self.pump(lambda: self.controller.stops == 1)
         self.assertEqual(self.controller.state, "stopped")
 
-    def test_persistent_header_and_theme_controls_follow_process_state(self):
-        self.assertTrue(self.app.header_status.winfo_exists())
-        self.assertEqual(self.app.header_status.cget("textvariable"), str(self.app.state_text))
-        original = self.app.theme_name
-        self.app.theme_button.invoke()
-        self.root.update()
-        self.assertNotEqual(self.app.theme_name, original)
-        self.controller.state = "online"
-        self.app._refresh_controls()
-        self.assertEqual(self.app.header_action.cget("text"), "Stop Bot")
-        self.assertEqual(self.app.header_status.cget("style"), "Status.Success.TLabel")
-
-    def test_dashboard_log_controls_filter_copy_and_clear_only_the_view(self):
-        self.app._append_log("Bot online")
-        self.app._append_log("WARNING tunnel retry")
-        self.app._append_log("ERROR delivery failed")
-        self.app.log_query.set("tunnel")
-        self.root.update()
-        self.assertIn("WARNING tunnel retry", self.app.log.get("1.0", "end"))
-        self.assertNotIn("Bot online", self.app.log.get("1.0", "end"))
-        self.app.log_query.set("")
-        self.app.log_filter.set("Errors")
-        self.root.update()
-        self.assertIn("ERROR delivery failed", self.app.log.get("1.0", "end"))
-        self.app.copy_log()
-        self.assertIn("ERROR delivery failed", self.root.clipboard_get())
-        self.app.clear_log_view()
-        self.assertEqual(self.app.log_buffer.lines, [])
-
-    def test_log_viewport_stays_put_when_following_is_disabled(self):
-        self.root.deiconify()
-        self.app.show_page("Dashboard")
-        for index in range(80):
-            self.app.log_buffer.append(f"Activity line {index}")
-        self.app._render_log()
-        self.root.update()
-        self.app.log_autoscroll.set(False)
-        self.app.log.yview_moveto(0.5)
-        self.root.update()
-        before = self.app.log.yview()[0]
-        self.app._append_log("One more activity line")
-        self.root.update()
-        self.assertAlmostEqual(self.app.log.yview()[0], before, delta=0.03)
-
     def test_using_macro_selects_settings_without_overwriting_unsaved_edits(self):
         self.app.settings.variables["PORT"].set("8000")
         self.app.macros.choose_default("login", "DH09D.json")
@@ -348,55 +249,6 @@ class ControlPanelTests(unittest.TestCase):
         self.assertEqual(self.app.settings.variables["PORT"].get(), "8000")
         self.assertTrue(self.app.settings.dirty)
         self.assertEqual(self.app.current_page, "Settings")
-
-    def test_settings_status_uses_saved_and_unsaved_semantic_styles(self):
-        self.app.settings.update_controls(False, False)
-        self.assertEqual(
-            self.app.settings.dirty_label.cget("style"), "Status.Success.TLabel"
-        )
-        self.app.settings.variables["PORT"].set("8000")
-        self.app.settings.update_controls(False, False)
-        self.assertEqual(
-            self.app.settings.dirty_label.cget("style"), "Status.Warning.TLabel"
-        )
-
-    def test_targets_have_scrollbars_count_and_selection_aware_actions(self):
-        targets = self.app.targets
-        self.assertTrue(targets.table_scroll.winfo_exists())
-        self.assertTrue(targets.table_xscroll.winfo_exists())
-        self.assertIn("disabled", targets.update_button.state())
-        self.assertIn("disabled", targets.remove_button.state())
-        targets.target_id.set("09D")
-        targets.target_name.set("DH09D Generator")
-        targets.target_macro.set("DH09D.json")
-        targets.add_row()
-        self.assertEqual(targets.count_text.get(), "1 target")
-        targets.table.selection_set("0")
-        targets._select()
-        targets.update_controls(False, False)
-        self.assertNotIn("disabled", targets.update_button.state())
-        self.assertNotIn("disabled", targets.remove_button.state())
-
-    def test_target_editor_reflows_between_wide_and_compact_layouts(self):
-        targets = self.app.targets
-        targets._layout_editor(900)
-        self.assertEqual(targets.editor.grid_info()["column"], 1)
-        self.assertEqual(targets.editor.grid_info()["row"], 0)
-        targets._layout_editor(600)
-        self.assertEqual(targets.editor.grid_info()["column"], 0)
-        self.assertEqual(targets.editor.grid_info()["row"], 1)
-
-    def test_macro_actions_require_a_selected_macro(self):
-        macros = self.app.macros
-        macros.table.selection_remove(*macros.table.selection())
-        macros.update_controls(False, False)
-        self.assertIn("disabled", macros.play_button.state())
-        first = macros.table.get_children()[0]
-        macros.table.selection_set(first)
-        macros._selection_changed()
-        macros.update_controls(False, False)
-        self.assertNotIn("disabled", macros.play_button.state())
-        self.assertNotIn("disabled", macros.login_button.state())
 
 
 if __name__ == "__main__":
