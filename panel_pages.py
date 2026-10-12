@@ -160,7 +160,7 @@ FORM_SECTIONS = {
                 (
                     "DETECTOR_INTERVAL_SEC",
                     "Login polling interval (seconds)",
-                    "Checks for the login anchor after a macro. Default 0.5; use 0.1 for faster polling.",
+                    "Checks for the login anchor after a macro. Default 0.25; use 0.1 for faster polling.",
                 ),
                 (
                     "LOGIN_WAIT_SECONDS",
@@ -180,7 +180,7 @@ FORM_SECTIONS = {
                 (
                     "LINE_WEBP_QUALITY",
                     "Full-resolution WebP quality",
-                    "1–100; default 90. The image keeps its original resolution.",
+                    "1–100; default 80. The image keeps its original resolution.",
                 ),
                 (
                     "IMAGE_TTL_SECONDS",
@@ -659,14 +659,18 @@ class MacrosPage(ttk.Frame):
                 ("Use for login", lambda: self.choose_default("login")),
                 ("Use for logout", lambda: self.choose_default("logout")),
                 ("Refresh macros", self.refresh),
+                ("Open macros folder", self.open_macros_folder),
             ]
         ):
             button = ttk.Button(toolbar, text=text, command=action)
             button.grid(
-                row=index // 3, column=index % 3, sticky="ew", padx=(0, 8), pady=(0, 6)
+                row=index // 4, column=index % 4, sticky="ew", padx=(0, 8), pady=(0, 6)
             )
+            toolbar.columnconfigure(index % 4, weight=1)
             if index < 5:
                 self.tool_buttons.append(button)
+            if text == "Open macros folder":
+                self.open_folder_button = button
         anchor = ttk.LabelFrame(
             self,
             text="Login-page detection image",
@@ -773,6 +777,9 @@ class MacrosPage(ttk.Frame):
         except ValueError as error:
             self.app.show_error("Could not play macro", error)
 
+    def open_macros_folder(self):
+        self.app.open_folder("scripts/macros")
+
     def import_file(self):
         source = filedialog.askopenfilename(
             parent=self,
@@ -810,14 +817,21 @@ class MacrosPage(ttk.Frame):
         if source:
             self.app.background(
                 lambda: self.app.store.import_anchor(source),
-                lambda result: (
-                    self.refresh(),
-                    self.app.refresh_setup(),
-                    self.app.set_notice(
-                        "Login anchor saved. Previous image backed up if present."
-                    ),
-                ),
+                self.anchor_imported,
             )
+
+    def anchor_imported(self, result):
+        self.refresh()
+        self.app.refresh_setup()
+        self.app.set_notice(
+            "Login anchor saved and configured. Previous image backed up if present."
+        )
+        messagebox.showinfo(
+            "Login anchor saved",
+            "The image was copied to assets/login_anchor.png and configured for "
+            "login-page detection.",
+            parent=self,
+        )
 
     def update_controls(self, busy, working):
         for button in self.tool_buttons + [self.anchor_button]:

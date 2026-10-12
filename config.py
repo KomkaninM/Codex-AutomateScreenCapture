@@ -77,17 +77,17 @@ class Settings:
     auto_logout: bool = False
     reply_unknown: bool = False
     settle_delay: float = 2.0
-    detector_interval: float = 0.5
+    detector_interval: float = 0.25
     confidence: float = 0.8
     internal_api_token: str = ""
     timezone: str = "Asia/Bangkok"
     expected_width: int = 3000
     expected_height: int = 2000
-    max_macro_seconds: float = 35.0
+    max_macro_seconds: float = 10.0
     image_ttl_seconds: int = 0
-    login_wait_seconds: float = 30.0
+    login_wait_seconds: float = 10.0
     recorded_step_delay_seconds: float = 0.2
-    line_webp_quality: int = 90
+    line_webp_quality: int = 80
 
     @property
     def delivery_id(self) -> str:
@@ -151,19 +151,19 @@ class Settings:
             auto_logout=boolean(val("ENABLE_AUTO_LOGOUT", "False")),
             reply_unknown=boolean(val("REPLY_UNKNOWN_COMMANDS", "False")),
             settle_delay=float(val("MACRO_SETTLE_DELAY", "2.0")),
-            detector_interval=float(val("DETECTOR_INTERVAL_SEC", "0.5")),
+            detector_interval=float(val("DETECTOR_INTERVAL_SEC", "0.25")),
             confidence=float(val("CONFIDENCE_THRESHOLD", "0.8")),
             internal_api_token=val("INTERNAL_API_TOKEN"),
             timezone=val("TIMEZONE", "Asia/Bangkok"),
             expected_width=int(val("DESKTOP_WIDTH", "3000")),
             expected_height=int(val("DESKTOP_HEIGHT", "2000")),
-            max_macro_seconds=float(val("MAX_MACRO_SECONDS", "35")),
+            max_macro_seconds=float(val("MAX_MACRO_SECONDS", "10")),
             image_ttl_seconds=int(val("IMAGE_TTL_SECONDS", "0")),
-            login_wait_seconds=float(val("LOGIN_WAIT_SECONDS", "30")),
+            login_wait_seconds=float(val("LOGIN_WAIT_SECONDS", "10")),
             recorded_step_delay_seconds=float(
                 val("RECORDED_STEP_DELAY_SECONDS", "0.2")
             ),
-            line_webp_quality=int(val("LINE_WEBP_QUALITY", "90")),
+            line_webp_quality=int(val("LINE_WEBP_QUALITY", "80")),
         )
         ZoneInfo(cfg.timezone)
         if not 1 <= cfg.line_webp_quality <= 100:

@@ -75,8 +75,13 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(getattr(cfg, "bms_username", None), "operator")
         self.assertEqual(getattr(cfg, "bms_password", None), "private-password")
 
-    def test_login_anchor_wait_defaults_to_thirty_seconds(self):
-        self.assertEqual(Settings.load(self.root, environ={}).login_wait_seconds, 30)
+    def test_operator_timing_and_image_defaults(self):
+        cfg = Settings.load(self.root, environ={})
+
+        self.assertEqual(cfg.max_macro_seconds, 10)
+        self.assertEqual(cfg.login_wait_seconds, 10)
+        self.assertEqual(cfg.detector_interval, 0.25)
+        self.assertEqual(cfg.line_webp_quality, 80)
 
     def test_login_poll_and_recorded_step_delay_load_and_validate(self):
         (self.root / ".env").write_text(

@@ -6,7 +6,9 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
+
+from panel_pages import MacrosPage
 
 try:
     import tkinter as tk
@@ -43,6 +45,32 @@ class StubController:
 
     def close(self):
         pass
+
+
+class MacroPageActionTests(unittest.TestCase):
+    def setUp(self):
+        self.page = MacrosPage.__new__(MacrosPage)
+        self.page.app = Mock()
+        self.page.refresh = Mock()
+
+    def test_open_macros_folder_uses_project_folder_action(self):
+        self.page.open_macros_folder()
+
+        self.page.app.open_folder.assert_called_once_with("scripts/macros")
+
+    def test_successful_anchor_import_confirms_saved_detection_image(self):
+        destination = Path("project/assets/login_anchor.png")
+
+        with patch("panel_pages.messagebox.showinfo") as showinfo:
+            self.page.anchor_imported(destination)
+
+        self.page.refresh.assert_called_once_with()
+        self.page.app.refresh_setup.assert_called_once_with()
+        self.page.app.set_notice.assert_called_once()
+        title, message = showinfo.call_args.args
+        self.assertEqual(title, "Login anchor saved")
+        self.assertIn("assets/login_anchor.png", message)
+        self.assertIn("login-page detection", message)
 
 
 @unittest.skipUnless(
@@ -169,6 +197,7 @@ class ControlPanelTests(unittest.TestCase):
             button.winfo_rooty() + button.winfo_height(),
             self.root.winfo_rooty() + self.root.winfo_height() - 30,
         )
+        self.assertTrue(self.app.macros.open_folder_button.winfo_viewable())
 
     def test_dashboard_log_can_be_reached_at_minimum_window_size(self):
         self.root.deiconify()

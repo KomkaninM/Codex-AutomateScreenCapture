@@ -447,13 +447,17 @@ def main():
                     raise KeyboardInterrupt
                 startup_banner(cfg, bot.line)
                 bot.scheduler.start()
-                dispatcher.submit(lambda: send_online_notification(cfg, bot.line))
-                if control:
-                    control.publish(
-                        "online",
-                        port=cfg.port,
-                        webhook=cfg.public_tunnel_url + "/callback",
-                    )
+
+                def announce_online():
+                    send_online_notification(cfg, bot.line)
+                    if control:
+                        control.publish(
+                            "online",
+                            port=cfg.port,
+                            webhook=cfg.public_tunnel_url + "/callback",
+                        )
+
+                dispatcher.submit(announce_online)
                 http.run()
         except KeyboardInterrupt:
             log.info("Stopping scheduler and draining desktop transactions.")

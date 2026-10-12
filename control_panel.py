@@ -373,11 +373,6 @@ class ControlPanel:
             toolbar, text="Check LINE quota", command=self.check_quota
         )
         self.quota_button.pack(side="left", padx=8)
-        ttk.Button(
-            toolbar,
-            text="Open macros folder",
-            command=lambda: self.open_folder("scripts/macros"),
-        ).pack(side="left")
         ttk.Label(toolbar, text="Live log", style="Muted.TLabel").pack(side="right")
         log_frame = ttk.Frame(page.body, style="Page.TFrame")
         log_frame.pack(fill="both", expand=True)
