@@ -16,7 +16,7 @@ from zoneinfo import ZoneInfoNotFoundError
 
 from dotenv import dotenv_values, set_key
 
-from config import Settings, macro_name
+from config import Settings, boolean, macro_name
 from launcher import ensure_env_file, launcher_lock
 from macro_player import MacroPlayer
 from macro_tool import convert_legacy, save_macro
@@ -62,6 +62,43 @@ ALIASES = {
     "LOGIN_MACRO_SCRIPT": "DEFAULT_LOGIN_MACRO",
     "NGROK_DOMAIN": "PUBLIC_TUNNEL_URL",
 }
+
+SETTING_NOTIFICATION_FIELDS = (
+    ("LOGIN_MACRO_SCRIPT", "Default login macro"),
+    ("LOGOUT_MACRO_SCRIPT", "Logout macro"),
+    ("ENABLE_AUTO_LOGOUT", "Auto logout"),
+    ("REPLY_UNKNOWN_COMMANDS", "Reply to unknown commands"),
+    ("MACRO_SETTLE_DELAY", "Page loading delay"),
+    ("MAX_MACRO_SECONDS", "Maximum macro time"),
+    ("DETECTOR_INTERVAL_SEC", "Login polling interval"),
+    ("LOGIN_WAIT_SECONDS", "Maximum login wait"),
+    ("CONFIDENCE_THRESHOLD", "Login anchor threshold"),
+    ("RECORDED_STEP_DELAY_SECONDS", "Recorded action delay"),
+    ("TIMEZONE", "Timezone"),
+    ("LINE_WEBP_QUALITY", "WebP quality"),
+    ("IMAGE_TTL_SECONDS", "Image link lifetime"),
+    ("DESKTOP_WIDTH", "Desktop width"),
+    ("DESKTOP_HEIGHT", "Desktop height"),
+    ("NGROK_DOMAIN", "ngrok domain"),
+    ("PORT", "Server port"),
+)
+
+
+def settings_change_message(before, after):
+    lines = []
+    for key, label in SETTING_NOTIFICATION_FIELDS:
+        old, new = before.get(key, ""), after.get(key, "")
+        if old == new:
+            continue
+        if key in {"ENABLE_AUTO_LOGOUT", "REPLY_UNKNOWN_COMMANDS"}:
+            try:
+                new = "Enabled" if boolean(new) else "Disabled"
+            except ValueError:
+                new = str(new)
+        elif not new:
+            new = "Not configured"
+        lines.append(f"• {label}: {new}")
+    return "⚙️ Bot settings updated\n" + "\n".join(lines) if lines else ""
 
 
 class StaleConfiguration(ValueError):

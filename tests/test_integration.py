@@ -19,6 +19,7 @@ import numpy as np
 import requests
 from PIL import Image
 
+from automation_errors import AutomationError
 from capture import CaptureEngine
 from commands import Bot
 from config import RuntimeConfig, Settings
@@ -92,6 +93,8 @@ class IntegrationTests(unittest.TestCase):
         messages = bot.line.reply.call_args.args[1]
         self.assertIn("Note: status", messages[0]["text"])
         self.assertIn("Timestamp:", messages[0]["text"])
+        self.assertIn("Target: 07C", messages[0]["text"])
+        self.assertIn("Macro: DH07C.json", messages[0]["text"])
         image = messages[1]
         self.assertTrue(image["originalContentUrl"].endswith("_line.webp"))
         self.assertTrue(image["previewImageUrl"].endswith("_preview.webp"))
@@ -331,11 +334,124 @@ class IntegrationTests(unittest.TestCase):
             )
         )
 
+    def test_start_capture_replies_with_structured_schedule_and_initial_capture_zero(
+        self,
+    ):
+        bot = self.make_bot()
+
+        bot.handle(
+            self.event("start-capture 30m 07C daily report --starttime 15:30:00"),
+            time.monotonic(),
+        )
+
+        job = next(iter(bot.scheduler.jobs.values()))
+        destination, messages = bot.line.reply.call_args.args
+        self.assertEqual(destination, "reply")
+        self.assertEqual(len(messages), 3)
+        schedule = messages[0]["text"]
+        self.assertEqual(
+            schedule,
+            "\n".join(
+                [
+                    "Schedule started",
+                    f"Code: {job.id}",
+                    f"Starts: {job.due:%Y-%m-%d %H:%M:%S} (Asia/Bangkok)",
+                    "Interval: 30 minutes",
+                    "Target: 07C",
+                    "Macro: DH07C.json",
+                    "Note: daily report",
+                ]
+            ),
+        )
+        self.assertNotIn("quota", schedule.lower())
+        self.assertIn("Scheduled capture #0\n", messages[1]["text"])
+        self.assertIn("Target: 07C", messages[1]["text"])
+        self.assertIn("Macro: DH07C.json", messages[1]["text"])
+        bot.line.push.assert_not_called()
+
+        job.capture(job.cancel)
+        self.assertIn(
+            "Scheduled capture #1\n", bot.line.push.call_args.args[1][0]["text"]
+        )
+
+    def test_failed_initial_capture_removes_only_the_new_schedule(self):
+        bot = self.make_bot()
+        existing = bot.scheduler.add(
+            3600,
+            datetime.now(timezone.utc) + timedelta(hours=1),
+            Mock(),
+            Mock(),
+        )
+        bot.workflow.capture = Mock(side_effect=AutomationError("capture failed"))
+
+        bot.handle(self.event("start-capture 30m"), time.monotonic())
+
+        self.assertEqual(set(bot.scheduler.jobs), {existing})
+
+    def test_stop_cancels_an_in_progress_initial_schedule_capture(self):
+        bot = self.make_bot()
+        cancellations = []
+
+        def capture(*args, cancel=None, **kwargs):
+            cancellations.append(cancel)
+            bot.cancel_schedules()
+
+        bot.workflow.capture = capture
+
+        bot.handle(self.event("start-capture 30m"), time.monotonic())
+
+        self.assertEqual(len(cancellations), 1)
+        self.assertIsNotNone(cancellations[0])
+        self.assertTrue(cancellations[0].is_set())
+
+    def test_recurring_push_cannot_overtake_initial_capture_zero(self):
+        bot = self.make_bot()
+        shot = bot.workflow.capture_engine.capture("initial")
+        entered, release = threading.Event(), threading.Event()
+        calls = 0
+        order = []
+
+        def capture(*args, deliver=None, **kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                entered.set()
+                release.wait(2)
+            deliver(shot)
+
+        bot.workflow.capture = capture
+        bot.line.reply.side_effect = lambda *args: order.append("free #0")
+        bot.line.push.side_effect = lambda *args: order.append("paid #1")
+        thread = threading.Thread(
+            target=lambda: bot.handle(self.event("start-capture 10s"), time.monotonic())
+        )
+        thread.start()
+        self.assertTrue(entered.wait(1))
+        job = next(iter(bot.scheduler.jobs.values()))
+
+        bot.scheduler.tick(job.due)
+        until = time.monotonic() + 0.3
+        while time.monotonic() < until and not bot.line.push.called:
+            time.sleep(0.01)
+        paid_before_zero = bot.line.push.called
+        release.set()
+        thread.join(2)
+
+        self.assertFalse(paid_before_zero)
+        self.assertEqual(order, ["free #0"])
+        bot.scheduler.tick(job.due)
+        until = time.monotonic() + 1
+        while time.monotonic() < until and not bot.line.push.called:
+            time.sleep(0.01)
+        self.assertEqual(order, ["free #0", "paid #1"])
+
     def test_schedule_counts_accepted_images_despite_logout_failure(self):
         self.runtime = RuntimeConfig(replace(self.runtime.snapshot(), auto_logout=True))
         bot = self.make_bot()
         bot.handle(self.event("start-capture 30m"), time.monotonic())
         job = next(iter(bot.scheduler.jobs.values()))
+        # Capture #0 was accepted and completed its own auto-logout transaction.
+        bot.workflow.player.play.reset_mock()
         bot.line.push.side_effect = LineAPIError("not accepted")
         with self.assertRaises(LineAPIError):
             job.capture(job.cancel)

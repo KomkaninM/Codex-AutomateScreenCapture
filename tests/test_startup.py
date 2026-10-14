@@ -21,6 +21,7 @@ class StartupTests(unittest.TestCase):
                 self.assertEqual(destination, recipient)
                 self.assertEqual(messages[0]["type"], "text")
                 self.assertIn("online", messages[0]["text"])
+                self.assertIn("Default macro: login_bms.json", messages[0]["text"])
                 line.reply.assert_not_called()
 
     def test_no_destination_does_not_send_a_notification(self):

@@ -4,11 +4,59 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+import panel_settings
 from config import Settings
 from panel_settings import ProjectStore, StaleConfiguration
 
 
 class PanelSettingsTests(unittest.TestCase):
+    def test_settings_change_message_includes_operations_and_omits_private_fields(self):
+        formatter = getattr(panel_settings, "settings_change_message", lambda *_: "")
+        before = {
+            "LOGIN_MACRO_SCRIPT": "old.json",
+            "ENABLE_AUTO_LOGOUT": "False",
+            "LINE_WEBP_QUALITY": "90",
+            "CHANNEL_ACCESS_TOKEN": "old-token",
+            "BMS_PASSWORD": "old-password",
+            "BMS_USERNAME": "old-user",
+            "NGROK_EXE_PATH": r"C:\\Users\\operator\\ngrok.exe",
+        }
+        after = before | {
+            "LOGIN_MACRO_SCRIPT": "DH09D.json",
+            "ENABLE_AUTO_LOGOUT": "True",
+            "LINE_WEBP_QUALITY": "80",
+            "CHANNEL_ACCESS_TOKEN": "new-token",
+            "BMS_PASSWORD": "new-password",
+            "BMS_USERNAME": "new-user",
+            "NGROK_EXE_PATH": r"D:\\private\\ngrok.exe",
+        }
+
+        message = formatter(before, after)
+
+        self.assertIn("Default login macro: DH09D.json", message)
+        self.assertIn("Auto logout: Enabled", message)
+        self.assertIn("WebP quality: 80", message)
+        for private in (
+            "new-token",
+            "new-password",
+            "new-user",
+            "D:\\private",
+            "access token",
+            "password",
+        ):
+            self.assertNotIn(private, message)
+
+    def test_settings_change_message_is_empty_for_private_changes_only(self):
+        formatter = getattr(panel_settings, "settings_change_message", lambda *_: "")
+
+        self.assertEqual(
+            formatter(
+                {"CHANNEL_ACCESS_TOKEN": "old", "BMS_PASSWORD": "old"},
+                {"CHANNEL_ACCESS_TOKEN": "new", "BMS_PASSWORD": "new"},
+            ),
+            "",
+        )
+
     def test_gui_manages_new_bms_and_timing_settings(self):
         from panel_pages import FORM_SECTIONS
         from panel_settings import ENV_FIELDS, SECRET_FIELDS

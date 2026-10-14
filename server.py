@@ -304,7 +304,9 @@ def send_online_notification(cfg, line):
             cfg.delivery_id,
             [
                 line.text(
-                    "🟢 BMS Automation Bot is online.\nSend capture to take a screenshot, or help to see commands."
+                    "🟢 BMS Automation Bot is online.\n"
+                    f"Default macro: {cfg.default_login_macro}\n"
+                    "Send capture to take a screenshot, or help to see commands."
                 )
             ],
         )

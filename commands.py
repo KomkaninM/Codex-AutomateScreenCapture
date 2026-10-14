@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import shlex
+import threading
 import time
 import traceback
 from dataclasses import dataclass
@@ -113,6 +114,17 @@ def next_start(starttime, now):
     return due if due > now else due + timedelta(days=1)
 
 
+def readable_interval(seconds):
+    for unit_seconds, singular, plural in (
+        (3600, "hour", "hours"),
+        (60, "minute", "minutes"),
+    ):
+        if seconds >= unit_seconds and seconds % unit_seconds == 0:
+            value = seconds / unit_seconds
+            return f"{value:g} {singular if value == 1 else plural}"
+    return f"{seconds:g} {'second' if seconds == 1 else 'seconds'}"
+
+
 class Bot:
     def __init__(self, runtime, workflow, line, scheduler):
         self.runtime = runtime
@@ -120,7 +132,15 @@ class Bot:
         self.line = line
         self.scheduler = scheduler
 
-    def _image_messages(self, shot, note="", *, capture_number=None):
+    def _target_macro(self, target, cfg=None):
+        cfg = cfg or self.runtime.snapshot()
+        return (
+            self.workflow.targets[target]["macro"]
+            if target
+            else cfg.default_login_macro
+        )
+
+    def _image_messages(self, shot, note="", *, capture_number=None, target=None):
         cfg = self.runtime.snapshot()
         urls = shot.urls(cfg.public_tunnel_url)
         captured_at = shot.captured_at.astimezone(ZoneInfo(cfg.timezone))
@@ -132,9 +152,28 @@ class Bot:
         caption = (
             f"{heading}\nTimestamp: {captured_at:%Y-%m-%d %H:%M:%S} ({cfg.timezone})"
         )
+        if target:
+            caption += f"\nTarget: {target}\nMacro: {self._target_macro(target, cfg)}"
         if note:
             caption += f"\nNote: {note}"
         return [self.line.text(caption), self.line.image(*urls)]
+
+    def _schedule_message(self, job_id, due, command, cfg):
+        lines = [
+            "Schedule started",
+            f"Code: {job_id}",
+            f"Starts: {due:%Y-%m-%d %H:%M:%S} ({cfg.timezone})",
+            (
+                f"Interval: {readable_interval(command.interval)}"
+                if command.interval is not None
+                else "Interval: Once"
+            ),
+            f"Target: {command.target or 'Default'}",
+            f"Macro: {self._target_macro(command.target, cfg)}",
+        ]
+        if command.note:
+            lines.append(f"Note: {command.note}")
+        return "\n".join(lines)
 
     def _scheduled(self, target, note, cancel, progress=None):
         progress = progress if progress is not None else ScheduleProgress()
@@ -148,7 +187,12 @@ class Bot:
             log.info("Sending scheduled image to LINE; waiting for acceptance.")
             self.line.push(
                 cfg.delivery_id,
-                self._image_messages(shot, note, capture_number=progress.delivered + 1),
+                self._image_messages(
+                    shot,
+                    note,
+                    capture_number=progress.delivered + 1,
+                    target=target,
+                ),
             )
             progress.delivered += 1
             log.info("LINE accepted the scheduled image message.")
@@ -232,6 +276,7 @@ class Bot:
                         else now + timedelta(seconds=command.interval)
                     )
                     progress = ScheduleProgress()
+                    schedule_cancel = threading.Event()
                     job_id = self.scheduler.add(
                         command.interval,
                         due,
@@ -242,17 +287,58 @@ class Bot:
                             command.target, cancel=cancel
                         ),
                         expected_generation=schedule_generation,
+                        cancel=schedule_cancel,
+                        paused=command.name == "start-capture",
                     )
-                    messages = [
-                        self.line.text(
-                            f"Scheduled {job_id} at {due.isoformat()}. Delivery uses push quota; group membership scales consumption."
-                        )
-                    ]
+                    schedule_message = self.line.text(
+                        self._schedule_message(job_id, due, command, cfg)
+                    )
+                    if command.name == "start-capture":
+                        initial_delivered = False
+
+                        def deliver_initial(shot):
+                            nonlocal initial_delivered, reply_attempted
+                            initial_messages = [
+                                schedule_message,
+                                *self._image_messages(
+                                    shot,
+                                    command.note,
+                                    capture_number=0,
+                                    target=command.target,
+                                ),
+                            ]
+                            self.workflow.check(deadline=deadline)
+                            reply_attempted = True
+                            log.info(
+                                "Sending initial scheduled image to LINE; waiting for acceptance."
+                            )
+                            self.line.reply(token, initial_messages)
+                            initial_delivered = True
+                            log.info("LINE accepted scheduled capture #0.")
+
+                        try:
+                            self.workflow.capture(
+                                command.target,
+                                deadline=deadline,
+                                cancel=schedule_cancel,
+                                deliver=deliver_initial,
+                            )
+                        except BaseException:
+                            if not initial_delivered:
+                                self.scheduler.cancel(job_id)
+                            raise
+                        finally:
+                            if initial_delivered:
+                                self.scheduler.resume(job_id)
+                    else:
+                        messages = [schedule_message]
                 else:
 
                     def deliver(shot):
                         nonlocal reply_attempted
-                        image_messages = self._image_messages(shot, command.note)
+                        image_messages = self._image_messages(
+                            shot, command.note, target=command.target
+                        )
                         self.workflow.check(deadline=deadline)
                         reply_attempted = True
                         log.info(

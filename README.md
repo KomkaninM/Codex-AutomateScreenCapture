@@ -26,7 +26,7 @@ For your existing installation:
 
 Credentials are masked until you click **Show**. GUI launches use the project `.env`, without inherited Windows environment overrides. `GROUP_ID` remains optional and takes priority over `USER_ID`; both blank allow `check-id` discovery. An invalid existing setting can be corrected in the forms before startup.
 
-Click **Save settings** while stopped, or **Save & Restart Bot** for an owned running bot. Restart validates the form before stopping, drains active work, saves, and starts again. Save target changes while stopped. Editing is briefly disabled while a save/restart is in progress so newer changes cannot be overwritten by completion. Changes are not silently saved on exit. Other running launchers or macro players prevent file writes.
+Click **Save & Apply** after editing settings. If the bot is online, the app validates the form, drains active work, safely stops the owned process, writes `.env`, and starts the bot again with the complete new configuration. You do not need to stop it yourself. One LINE push lists changed operational values such as macros, auto logout, timing, timezone, and image quality. Tokens, secrets, passwords, local paths, BMS usernames, and recipient IDs are never included. Secret-only changes do not produce a notification, and a notification failure does not prevent the saved configuration from restarting. Save target changes while stopped. Editing is briefly disabled while an apply is in progress so newer changes cannot be overwritten. Changes are not silently saved on exit. Other running launchers or macro players prevent file writes.
 
 Settings/target writes preserve unknown values and existing comments, reject stale forms, keep private backups under `.runtime/backups`, and replace files atomically. If OneDrive or permissions prevent replacement, the original file remains intact. Reload a form if LINE's `set-login` or another editor changed its file. Existing legacy variable aliases are updated alongside their canonical fields, including when clearing a value.
 
@@ -115,7 +115,7 @@ The template follows the variable names and defaults in the supplied Python conf
 | `capture` | Capture the current screen, logging in with the default macro if needed. |
 | `capture 07C [note]` | Use the target macro, save under `screenshots/07C`, and reply with an image. |
 | `capture [target] [note] --starttime 15:30:00` | Acknowledge now; one-time scheduled push at the next occurrence of this time. |
-| `start-capture 30m [target] [note] [--starttime 15:30]` | Recurring scheduled pushes; otherwise first capture is one interval from now. |
+| `start-capture 30m [target] [note] [--starttime 15:30]` | Reply immediately with capture #0, then send recurring pushes starting at #1. |
 | `stop-capture` | Cancel all schedules, including queued capture/precheck work. |
 | `set-login DH07A.json` | Validate a local macro, update the default, and persist to `.env`. |
 | `login` | Validate/recover the BMS session with the current login macro. |
@@ -129,7 +129,7 @@ Quote notes when needed. Macro names can omit `.json`; path traversal and arbitr
 
 iPhone smart punctuation is supported: `capture daily report —starttime 15:30` and `start-capture 30m daily report —starttime 15:30` work just like their `--starttime` equivalents. The en dash spelling `–starttime` also works. Dashes elsewhere in your note are preserved.
 
-Every image delivery includes a text caption with the actual capture timestamp in `TIMEZONE` and an optional `Note:` line. For example, `capture daily report` sends:
+Every image delivery includes a text caption with the actual capture timestamp in `TIMEZONE` and an optional `Note:` line. Targeted captures also show the target ID and macro filename. For example, `capture daily report` sends:
 
 ```text
 Capture
@@ -137,7 +137,7 @@ Timestamp: 2026-10-10 15:30:00 (Asia/Bangkok)
 Note: daily report
 ```
 
-Scheduled images use `Scheduled capture #1`, `Scheduled capture #2`, and so on. Each schedule has its own counter, starting at #1, including one-time captures. The number advances after LINE accepts the image request; failed captures/sends do not consume a number, and logout failure after acceptance still counts the delivered image. A new schedule starts over at #1. Captions and images share one reply/push request.
+`start-capture` replies with a structured schedule summary followed by `Scheduled capture #0` and its image. The summary shows the schedule code, readable local start time, interval, target, macro, and optional note. This initial image uses the command's free `replyToken`; the recurring pushes begin with `Scheduled capture #1`, then #2, and so on. One-time `capture --starttime` jobs begin at #1 when due. Each schedule has its own counter. The number advances after LINE accepts the image request; failed captures/sends do not consume a number, and logout failure after acceptance still counts the delivered image. A failed #0 cancels only its newly created schedule. Captions and images share one reply/push request.
 
 All interactive commands use `replyToken`, including `login` and `macro`, following the strict quota invariant. Scheduled deliveries have no reply token and use `pushMessage`; group recipient reach scales quota use. Multiple message objects in one delivery are sent in a single API request. LINE replies do not count toward monthly push quota. Failed/expired replies **never** fall back to a paid push. Start the interactive image request within 45 seconds of webhook receipt; logout happens after delivery acceptance and can finish afterward. Before starting input, the macro player checks that its recorded waits fit the remaining time. Timeout diagnostics report the step, elapsed time, and whether `MAX_MACRO_SECONDS` or the LINE reply deadline was limiting the run. Keep capture preparation below that deadline; queued interactive work expires after 45 seconds to leave margin for LINE token validity. For longer workflows use scheduling, or shorten macros. `MAX_MACRO_SECONDS` can be increased in `.env` for standalone/scheduled work, but it does not extend the interactive reply deadline. Expired commands may be dropped and require the operator to retry.
 

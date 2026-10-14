@@ -8,7 +8,10 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
+from config import Settings
+from line_api import LineAPI
 from panel_pages import MacrosPage
+from panel_settings import ProjectStore
 
 try:
     import tkinter as tk
@@ -71,6 +74,38 @@ class MacroPageActionTests(unittest.TestCase):
         self.assertEqual(title, "Login anchor saved")
         self.assertIn("assets/login_anchor.png", message)
         self.assertIn("login-page detection", message)
+
+
+@unittest.skipUnless(tk, "Tkinter is required to import the control panel")
+class SettingsApplyTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.project = Path(self.tmp.name)
+        template = Path(__file__).resolve().parents[1] / ".env.example"
+        (self.project / ".env.example").write_bytes(template.read_bytes())
+        self.panel = ControlPanel.__new__(ControlPanel)
+        self.panel.project = self.project
+        self.panel.store = ProjectStore(self.project)
+
+    def test_saved_operational_changes_are_pushed_to_group_without_secrets(self):
+        values, version = self.panel.store.load_settings()
+        updated = values | {
+            "CHANNEL_ACCESS_TOKEN": "private-token",
+            "GROUP_ID": "group",
+            "USER_ID": "user",
+            "LOGIN_MACRO_SCRIPT": "DH09D.json",
+        }
+        line = Mock(text=LineAPI.text)
+
+        with patch("control_panel.LineAPI", return_value=line):
+            _, warning = self.panel._save_settings_and_notify(updated, version, values)
+
+        self.assertEqual(warning, "")
+        destination, messages = line.push.call_args.args
+        self.assertEqual(destination, "group")
+        self.assertIn("Default login macro: DH09D.json", messages[0]["text"])
+        self.assertNotIn("private-token", messages[0]["text"])
 
 
 @unittest.skipUnless(
@@ -150,6 +185,17 @@ class ControlPanelTests(unittest.TestCase):
         entry.insert(0, "9000")
         self.assertEqual(self.app.settings.variables["PORT"].get(), "8000")
         self.pump(lambda: self.controller.starts == 1 and not self.app.working)
+
+    def test_primary_save_applies_changes_and_restarts_an_online_bot(self):
+        self.controller.state = "online"
+        self.app.settings.variables["LINE_WEBP_QUALITY"].set("75")
+        self.app._refresh_controls()
+
+        self.app.settings.save_button.invoke()
+
+        self.assertEqual(self.controller.stops, 1)
+        self.pump(lambda: self.controller.starts == 1 and not self.app.working)
+        self.assertEqual(Settings.load(self.project, environ={}).line_webp_quality, 75)
 
     def test_close_during_start_action_stops_child_before_destroying_window(self):
         import threading

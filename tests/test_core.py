@@ -387,6 +387,42 @@ class CoreTests(unittest.TestCase):
         pending.pop(0)()
         self.assertEqual(calls, ["precheck"])
 
+    def test_scheduler_can_cancel_one_job_without_stopping_others(self):
+        now = datetime.fromisoformat("2026-10-09T15:00:00+07:00")
+        scheduler = Scheduler(Mock(), clock=lambda: now)
+        first = scheduler.add(30, now + timedelta(seconds=30), Mock(), Mock())
+        second = scheduler.add(60, now + timedelta(seconds=60), Mock(), Mock())
+
+        self.assertTrue(scheduler.cancel(first))
+
+        self.assertNotIn(first, scheduler.jobs)
+        self.assertIn(second, scheduler.jobs)
+        self.assertFalse(scheduler.cancel(first))
+
+    def test_scheduler_paused_job_waits_until_resumed(self):
+        now = datetime.fromisoformat("2026-10-09T15:00:00+07:00")
+        pending = []
+
+        def dispatch(fn):
+            pending.append(fn)
+            return Future()
+
+        scheduler = Scheduler(dispatch, clock=lambda: now)
+        job_id = scheduler.add(
+            30,
+            now + timedelta(seconds=30),
+            Mock(),
+            Mock(),
+            paused=True,
+        )
+
+        scheduler.tick(now + timedelta(seconds=30))
+        self.assertEqual(pending, [])
+        self.assertTrue(scheduler.resume(job_id))
+        scheduler.tick(now + timedelta(seconds=30))
+        self.assertEqual(len(pending), 1)
+        self.assertFalse(scheduler.resume("missing"))
+
     def test_line_reply_and_push_are_separate_and_images_use_jpeg(self):
         transport = Mock()
         transport.request.return_value = Mock(

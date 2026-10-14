@@ -245,8 +245,9 @@ class SettingsPage(ttk.Frame):
         self.saved = {}
         ttk.Label(
             self,
-            text="Edit your project settings. Save while stopped, or use Save & Restart Bot.",
+            text="Edit your project settings. Save & Apply automatically restarts an online bot so every change takes effect together.",
             style="Muted.TLabel",
+            wraplength=800,
         ).pack(anchor="w", pady=(0, 10))
         notebook = ttk.Notebook(self)
         notebook.pack(fill="both", expand=True)
@@ -279,15 +280,9 @@ class SettingsPage(ttk.Frame):
         bottom.pack(fill="x")
         self.dirty_label = ttk.Label(bottom, text="Saved", style="Muted.TLabel")
         self.dirty_label.pack(side="left")
-        self.restart_button = ttk.Button(
-            bottom,
-            text="Save & Restart Bot",
-            command=lambda: app.save_settings(restart=True),
-        )
-        self.restart_button.pack(side="right", padx=(8, 0))
         self.save_button = ttk.Button(
             bottom,
-            text="Save settings",
+            text="Save & Apply",
             style="Primary.TButton",
             command=app.save_settings,
         )
@@ -403,15 +398,14 @@ class SettingsPage(ttk.Frame):
         self.dirty_label.configure(
             text="Unsaved changes" if self.dirty else "Saved to .env"
         )
-        self.save_button.state(["disabled"] if busy or working else ["!disabled"])
-        self.restart_button.state(
-            ["!disabled"]
-            if busy
-            and self.app.controller.mode == "bot"
-            and self.app.controller.state == "online"
-            and not working
-            else ["disabled"]
+        can_apply = not working and (
+            not busy
+            or (
+                self.app.controller.mode == "bot"
+                and self.app.controller.state == "online"
+            )
         )
+        self.save_button.state(["!disabled"] if can_apply else ["disabled"])
 
 
 class TargetsPage(ttk.Frame):
@@ -758,9 +752,7 @@ class MacrosPage(ttk.Frame):
             ].set(name)
             self.app.show_page("Settings")
             self.app.settings_notebook_automation()
-            self.app.set_notice(
-                f"Selected {name} for {kind}. Click Save settings to apply."
-            )
+            self.app.set_notice(f"Selected {name} for {kind}. Click Save & Apply.")
         except ValueError as error:
             self.app.show_error("Could not select macro", error)
 
@@ -844,7 +836,7 @@ class HelpPage(Scrollable):
         paragraphs = [
             (
                 "Get online in four steps",
-                "1. In Settings → LINE & ngrok, enter the LINE access token, channel secret, and your ngrok details. Browse to ngrok.exe. Save settings.\n\n2. Click Start Bot on Dashboard. Copy the webhook URL into LINE Developers → Messaging API, then enable Use webhook. For a reserved ngrok domain this setup is done once.\n\n3. Add the bot as a friend or invite it to your LINE group. Send check-id, stop the bot, enter your User ID or Group ID in Settings, save, and start again. Group ID takes priority; leave it blank for private chats.\n\n4. In Macros, record/import your login macro and select a login-page anchor crop. Choose the default login macro in Settings. Keep the BMS visible and the app minimized during capture.",
+                "1. In Settings → LINE & ngrok, enter the LINE access token, channel secret, and your ngrok details. Browse to ngrok.exe. Click Save & Apply.\n\n2. Click Start Bot on Dashboard. Copy the webhook URL into LINE Developers → Messaging API, then enable Use webhook. For a reserved ngrok domain this setup is done once.\n\n3. Add the bot as a friend or invite it to your LINE group. Send check-id, enter your User ID or Group ID in Settings, then click Save & Apply. Group ID takes priority; leave it blank for private chats.\n\n4. In Macros, record/import your login macro and select a login-page anchor crop. Choose the default login macro in Settings. Keep the BMS visible and the app minimized during capture.",
             ),
             (
                 "Useful LINE commands",
@@ -852,11 +844,11 @@ class HelpPage(Scrollable):
             ),
             (
                 "Reports and image delivery",
-                "Full-resolution WebP images are sent through ngrok, as requested for your tested setup. Full-resolution quality-100 JPEG reports remain permanently in screenshots/<target-or-macro>/. WebP quality defaults to 90 and can be changed in Settings. LINE officially documents JPEG/PNG; WebP follows your operator-tested setup.\n\nCaptions include the actual capture time and optional note. Each schedule starts at #1 and counts accepted image deliveries. Schedules are stored in memory and must be started again after restarting the bot.",
+                "Full-resolution WebP images are sent through ngrok, as requested for your tested setup. Full-resolution quality-100 JPEG reports remain permanently in screenshots/<target-or-macro>/. WebP quality defaults to 80 and can be changed in Settings. LINE officially documents JPEG/PNG; WebP follows your operator-tested setup.\n\nCaptions include the actual capture time and optional note. Target captures show their macro. Recurring schedules reply with an immediate #0 capture, then push #1, #2, and so on. Schedules are stored in memory and must be started again after restarting the bot.",
             ),
             (
                 "Safe stopping and editing",
-                "Stop Bot waits for an active capture/send/logout to finish, then closes its server and the ngrok process it started. An existing external ngrok tunnel is left running. If another launcher is running, use its own window to stop it.\n\nSave settings and targets while stopped, or use Save & Restart Bot for settings. Private backups are kept in .runtime/backups. If a file changed in LINE or another editor, reload it before saving.",
+                "Stop Bot waits for an active capture/send/logout to finish, then closes its server and the ngrok process it started. An existing external ngrok tunnel is left running. If another launcher is running, use its own window to stop it.\n\nSave & Apply automatically performs a safe restart when the bot is online and sends a LINE summary containing only non-sensitive operational changes. Private backups are kept in .runtime/backups. If a file changed in LINE or another editor, reload it before saving.",
             ),
             (
                 "Macro tools",
