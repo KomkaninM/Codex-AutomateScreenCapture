@@ -277,6 +277,9 @@ class Bot:
                     )
                     progress = ScheduleProgress()
                     schedule_cancel = threading.Event()
+                    immediate_initial = (
+                        command.name == "start-capture" and not command.starttime
+                    )
                     job_id = self.scheduler.add(
                         command.interval,
                         due,
@@ -288,12 +291,12 @@ class Bot:
                         ),
                         expected_generation=schedule_generation,
                         cancel=schedule_cancel,
-                        paused=command.name == "start-capture",
+                        paused=immediate_initial,
                     )
                     schedule_message = self.line.text(
                         self._schedule_message(job_id, due, command, cfg)
                     )
-                    if command.name == "start-capture":
+                    if immediate_initial:
                         initial_delivered = False
 
                         def deliver_initial(shot):

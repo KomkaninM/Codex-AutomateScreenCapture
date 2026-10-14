@@ -334,10 +334,10 @@ class IntegrationTests(unittest.TestCase):
             )
         )
 
-    def test_start_capture_replies_with_structured_schedule_and_initial_capture_zero(
-        self,
-    ):
+    def test_timed_start_capture_replies_with_schedule_and_waits_for_capture_one(self):
         bot = self.make_bot()
+        scheduled_capture = bot.workflow.capture
+        bot.workflow.capture = Mock()
 
         bot.handle(
             self.event("start-capture 30m 07C daily report --starttime 15:30:00"),
@@ -345,9 +345,10 @@ class IntegrationTests(unittest.TestCase):
         )
 
         job = next(iter(bot.scheduler.jobs.values()))
+        self.assertEqual(bot.line.reply.call_count, 1)
         destination, messages = bot.line.reply.call_args.args
         self.assertEqual(destination, "reply")
-        self.assertEqual(len(messages), 3)
+        self.assertEqual(len(messages), 1)
         schedule = messages[0]["text"]
         self.assertEqual(
             schedule,
@@ -364,6 +365,26 @@ class IntegrationTests(unittest.TestCase):
             ),
         )
         self.assertNotIn("quota", schedule.lower())
+        self.assertFalse(job.paused)
+        bot.workflow.capture.assert_not_called()
+        bot.line.push.assert_not_called()
+
+        bot.workflow.capture = scheduled_capture
+        job.capture(job.cancel)
+        self.assertIn(
+            "Scheduled capture #1\n", bot.line.push.call_args.args[1][0]["text"]
+        )
+
+    def test_untimed_start_capture_replies_with_initial_capture_zero(self):
+        bot = self.make_bot()
+
+        bot.handle(self.event("start-capture 30m 07C daily report"), time.monotonic())
+
+        job = next(iter(bot.scheduler.jobs.values()))
+        destination, messages = bot.line.reply.call_args.args
+        self.assertEqual(destination, "reply")
+        self.assertEqual(len(messages), 3)
+        self.assertIn("Schedule started", messages[0]["text"])
         self.assertIn("Scheduled capture #0\n", messages[1]["text"])
         self.assertIn("Target: 07C", messages[1]["text"])
         self.assertIn("Macro: DH07C.json", messages[1]["text"])
