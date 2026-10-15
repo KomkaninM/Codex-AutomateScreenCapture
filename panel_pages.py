@@ -118,6 +118,16 @@ FORM_SECTIONS = {
             "BMS session",
             [
                 (
+                    "BMS_USERNAME",
+                    "BMS login username",
+                    "Used by Macro Tool option 4 when creating a fixed-template macro.",
+                ),
+                (
+                    "BMS_PASSWORD",
+                    "BMS login password",
+                    "Stored only in your private .env and inserted into locally generated macros.",
+                ),
+                (
                     "LOGIN_MACRO_SCRIPT",
                     "Default login macro",
                     "Runs once when the login-page anchor is found.",
@@ -140,12 +150,12 @@ FORM_SECTIONS = {
                 (
                     "MAX_MACRO_SECONDS",
                     "Maximum macro time (seconds)",
-                    "Interactive delivery must still start within the LINE reply deadline.",
+                    "Bounds input and fixed delays. wait_image uses its JSON timeout; LINE deadlines still apply.",
                 ),
                 (
                     "CONFIDENCE_THRESHOLD",
                     "Login anchor match threshold",
-                    "0–1; default 0.8. Higher values require a closer visual match.",
+                    "0–1; used only for the pre-macro login check. wait_image has its own confidence.",
                 ),
             ],
         ),
@@ -160,7 +170,7 @@ FORM_SECTIONS = {
                 (
                     "LINE_WEBP_QUALITY",
                     "Full-resolution WebP quality",
-                    "1–100; default 90. The image keeps its original resolution.",
+                    "1–100; default 80. The image keeps its original resolution.",
                 ),
                 (
                     "IMAGE_TTL_SECONDS",
@@ -205,14 +215,9 @@ FORM_SECTIONS = {
                     "Metadata only; playback does not check display size or scaling.",
                 ),
                 (
-                    "DETECTOR_INTERVAL_SEC",
-                    "Legacy detector interval",
-                    "Retained for compatibility. Captures check the login anchor once.",
-                ),
-                (
-                    "LOGIN_WAIT_SECONDS",
-                    "Legacy login wait",
-                    "Retained for compatibility. There is no post-login polling.",
+                    "RECORDED_STEP_DELAY_SECONDS",
+                    "Recorded step delay (seconds)",
+                    "Every action in a newly recorded macro uses this delay. Default 0.2.",
                 ),
             ],
         ),
@@ -230,8 +235,9 @@ class SettingsPage(ttk.Frame):
         self.saved = {}
         ttk.Label(
             self,
-            text="Edit your project settings. Save while stopped, or use Save & Restart Bot.",
+            text="Edit your project settings. Save & Apply automatically restarts an online bot so every change takes effect together.",
             style="Muted.TLabel",
+            wraplength=800,
         ).pack(anchor="w", pady=(0, 10))
         notebook = ttk.Notebook(self)
         notebook.pack(fill="both", expand=True)
@@ -264,15 +270,9 @@ class SettingsPage(ttk.Frame):
         bottom.pack(fill="x")
         self.dirty_label = ttk.Label(bottom, text="Saved", style="Muted.TLabel")
         self.dirty_label.pack(side="left")
-        self.restart_button = ttk.Button(
-            bottom,
-            text="Save & Restart Bot",
-            command=lambda: app.save_settings(restart=True),
-        )
-        self.restart_button.pack(side="right", padx=(8, 0))
         self.save_button = ttk.Button(
             bottom,
-            text="Save settings",
+            text="Save & Apply",
             style="Primary.TButton",
             command=app.save_settings,
         )
@@ -388,15 +388,14 @@ class SettingsPage(ttk.Frame):
         self.dirty_label.configure(
             text="Unsaved changes" if self.dirty else "Saved to .env"
         )
-        self.save_button.state(["disabled"] if busy or working else ["!disabled"])
-        self.restart_button.state(
-            ["!disabled"]
-            if busy
-            and self.app.controller.mode == "bot"
-            and self.app.controller.state == "online"
-            and not working
-            else ["disabled"]
+        can_apply = not working and (
+            not busy
+            or (
+                self.app.controller.mode == "bot"
+                and self.app.controller.state == "online"
+            )
         )
+        self.save_button.state(["!disabled"] if can_apply else ["disabled"])
 
 
 class TargetsPage(ttk.Frame):
@@ -644,14 +643,18 @@ class MacrosPage(ttk.Frame):
                 ("Use for login", lambda: self.choose_default("login")),
                 ("Use for logout", lambda: self.choose_default("logout")),
                 ("Refresh macros", self.refresh),
+                ("Open macros folder", self.open_macros_folder),
             ]
         ):
             button = ttk.Button(toolbar, text=text, command=action)
             button.grid(
-                row=index // 3, column=index % 3, sticky="ew", padx=(0, 8), pady=(0, 6)
+                row=index // 4, column=index % 4, sticky="ew", padx=(0, 8), pady=(0, 6)
             )
+            toolbar.columnconfigure(index % 4, weight=1)
             if index < 5:
                 self.tool_buttons.append(button)
+            if text == "Open macros folder":
+                self.open_folder_button = button
         anchor = ttk.LabelFrame(
             self,
             text="Login-page detection image",
@@ -675,7 +678,7 @@ class MacrosPage(ttk.Frame):
         self.anchor_button.pack(anchor="w")
         instructions = ttk.Label(
             self,
-            text="Recording: F8 starts/stops and saves; F9 cancels. Playback: switch to the BMS during the five-second countdown. The app minimizes during both operations. Passwords in macros remain private local files.",
+            text="Recording: F8 starts/stops and saves; F9 cancels. Playback: switch to the BMS during the three-second countdown. The app minimizes during both operations. Passwords in macros remain private local files.",
             style="Muted.TLabel",
             wraplength=780,
         )
@@ -739,9 +742,7 @@ class MacrosPage(ttk.Frame):
             ].set(name)
             self.app.show_page("Settings")
             self.app.settings_notebook_automation()
-            self.app.set_notice(
-                f"Selected {name} for {kind}. Click Save settings to apply."
-            )
+            self.app.set_notice(f"Selected {name} for {kind}. Click Save & Apply.")
         except ValueError as error:
             self.app.show_error("Could not select macro", error)
 
@@ -757,6 +758,9 @@ class MacrosPage(ttk.Frame):
             self.app.start_macro("play", self.selected())
         except ValueError as error:
             self.app.show_error("Could not play macro", error)
+
+    def open_macros_folder(self):
+        self.app.open_folder("scripts/macros")
 
     def import_file(self):
         source = filedialog.askopenfilename(
@@ -795,14 +799,21 @@ class MacrosPage(ttk.Frame):
         if source:
             self.app.background(
                 lambda: self.app.store.import_anchor(source),
-                lambda result: (
-                    self.refresh(),
-                    self.app.refresh_setup(),
-                    self.app.set_notice(
-                        "Login anchor saved. Previous image backed up if present."
-                    ),
-                ),
+                self.anchor_imported,
             )
+
+    def anchor_imported(self, result):
+        self.refresh()
+        self.app.refresh_setup()
+        self.app.set_notice(
+            "Login anchor saved and configured. Previous image backed up if present."
+        )
+        messagebox.showinfo(
+            "Login anchor saved",
+            "The image was copied to assets/login_anchor.png and configured for "
+            "login-page detection.",
+            parent=self,
+        )
 
     def update_controls(self, busy, working):
         for button in self.tool_buttons + [self.anchor_button]:
@@ -815,23 +826,23 @@ class HelpPage(Scrollable):
         paragraphs = [
             (
                 "Get online in four steps",
-                "1. In Settings → LINE & ngrok, enter the LINE access token, channel secret, and your ngrok details. Browse to ngrok.exe. Save settings.\n\n2. Click Start Bot on Dashboard. Copy the webhook URL into LINE Developers → Messaging API, then enable Use webhook. For a reserved ngrok domain this setup is done once.\n\n3. Add the bot as a friend or invite it to your LINE group. Send check-id, stop the bot, enter your User ID or Group ID in Settings, save, and start again. Group ID takes priority; leave it blank for private chats.\n\n4. In Macros, record/import your login macro and select a login-page anchor crop. Choose the default login macro in Settings. Keep the BMS visible and the app minimized during capture.",
+                "1. In Settings → LINE & ngrok, enter the LINE access token, channel secret, and your ngrok details. Browse to ngrok.exe. Click Save & Apply.\n\n2. Click Start Bot on Dashboard. Copy the webhook URL into LINE Developers → Messaging API, then enable Use webhook. For a reserved ngrok domain this setup is done once.\n\n3. Add the bot as a friend or invite it to your LINE group. Send check-id, enter your User ID or Group ID in Settings, then click Save & Apply. Group ID takes priority; leave it blank for private chats.\n\n4. In Macros, record/import your login macro and select a login-page anchor crop. Add wait_image steps to JSON wherever loading must pause, then choose the default login macro in Settings. Keep the BMS visible and the app minimized during capture.",
             ),
             (
                 "Useful LINE commands",
-                "capture                         Current screen\ncapture 09D daily report        Target with note\nstart-capture 30m daily report   Recurring capture\ncapture report —starttime 15:30  One-time capture\nstop-capture                    Stop all schedules\ncheck-id                        Find your chat IDs\ncheck-quota                     Show messaging quota\nenable-autologout                Log out after accepted delivery\ndisable-autologout               Keep the BMS session open",
+                "capture                                  Current screen\ncapture 09D daily report                 Target with note\nstart-capture 30m daily report            Recurring capture with immediate #0\nstart-capture 30m report -s 15:30         Start at 15:30 with #1\nstart-capture 30m report -m 10            Stop after 10 successful pictures\nstart-capture 30m report -s 15:30 -m 10   Combine start time and limit\ncapture report -s 15:30                   One-time capture\nstop-capture                              Stop all schedules\ncheck-id                                  Find your chat IDs\ncheck-quota                               Show messaging quota\nenable-autologout                          Log out after accepted delivery\ndisable-autologout                         Keep the BMS session open\n\nLong aliases --starttime and --max are also supported.",
             ),
             (
                 "Reports and image delivery",
-                "Full-resolution WebP images are sent through ngrok, as requested for your tested setup. Full-resolution quality-100 JPEG reports remain permanently in screenshots/<target-or-macro>/. WebP quality defaults to 90 and can be changed in Settings. LINE officially documents JPEG/PNG; WebP follows your operator-tested setup.\n\nCaptions include the actual capture time and optional note. Each schedule starts at #1 and counts accepted image deliveries. Schedules are stored in memory and must be started again after restarting the bot.",
+                "Full-resolution WebP images are sent through ngrok, as requested for your tested setup. Full-resolution quality-100 JPEG reports remain permanently in screenshots/<target-or-macro>/. WebP quality defaults to 80 and can be changed in Settings. LINE officially documents JPEG/PNG; WebP follows your operator-tested setup.\n\nCaptions include the actual capture time and optional note. Target captures show their macro. Recurring schedules without -s reply with an immediate #0 capture, then push #1, #2, and so on. Use -m to stop after a number of successful pictures; normal capture messages stay unchanged and one completion message is sent at the end. Schedules are stored in memory and must be started again after restarting the bot.",
             ),
             (
                 "Safe stopping and editing",
-                "Stop Bot waits for an active capture/send/logout to finish, then closes its server and the ngrok process it started. An existing external ngrok tunnel is left running. If another launcher is running, use its own window to stop it.\n\nSave settings and targets while stopped, or use Save & Restart Bot for settings. Private backups are kept in .runtime/backups. If a file changed in LINE or another editor, reload it before saving.",
+                "Stop Bot waits for an active capture/send/logout to finish, then closes its server and the ngrok process it started. An existing external ngrok tunnel is left running. If another launcher is running, use its own window to stop it.\n\nSave & Apply automatically performs a safe restart when the bot is online and sends a LINE summary containing only non-sensitive operational changes. Private backups are kept in .runtime/backups. If a file changed in LINE or another editor, reload it before saving.",
             ),
             (
                 "Macro tools",
-                "Stop the bot before recording or playing. F8 starts recording, then F8 stops and exports JSON. F9 cancels. Playback starts after five seconds so you can switch to the BMS; moving the mouse to a corner triggers the fail-safe.\n\nImports accept current macros and your old click_coord/type_text/press_key scripts. Existing filenames are preserved. The original recorded click coordinates are replayed without display consistency checks.",
+                "Stop the bot before recording or playing. F8 starts recording, then F8 stops and exports JSON. F9 cancels. Playback starts after three seconds so you can switch to the BMS; moving the mouse to a corner triggers the fail-safe.\n\nNew recordings use the configured delay for every exported action instead of reproducing the operator's timing gaps. Imports accept current macros, wait_image, and your old click_coord/type_text/press_key scripts. Existing filenames are preserved. The original recorded click coordinates are replayed without display consistency checks. Image waiting occurs only at explicit wait_image steps; there is no automatic wait after a macro.",
             ),
         ]
         for index, (title, text) in enumerate(paragraphs):

@@ -4,11 +4,96 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+import panel_settings
 from config import Settings
 from panel_settings import ProjectStore, StaleConfiguration
 
 
 class PanelSettingsTests(unittest.TestCase):
+    def test_settings_change_message_includes_operations_and_omits_private_fields(self):
+        formatter = getattr(panel_settings, "settings_change_message", lambda *_: "")
+        before = {
+            "LOGIN_MACRO_SCRIPT": "old.json",
+            "ENABLE_AUTO_LOGOUT": "False",
+            "LINE_WEBP_QUALITY": "90",
+            "CHANNEL_ACCESS_TOKEN": "old-token",
+            "BMS_PASSWORD": "old-password",
+            "BMS_USERNAME": "old-user",
+            "NGROK_EXE_PATH": r"C:\\Users\\operator\\ngrok.exe",
+        }
+        after = before | {
+            "LOGIN_MACRO_SCRIPT": "DH09D.json",
+            "ENABLE_AUTO_LOGOUT": "True",
+            "LINE_WEBP_QUALITY": "80",
+            "CHANNEL_ACCESS_TOKEN": "new-token",
+            "BMS_PASSWORD": "new-password",
+            "BMS_USERNAME": "new-user",
+            "NGROK_EXE_PATH": r"D:\\private\\ngrok.exe",
+        }
+
+        message = formatter(before, after)
+
+        self.assertIn("Default login macro: DH09D.json", message)
+        self.assertIn("Auto logout: Enabled", message)
+        self.assertIn("WebP quality: 80", message)
+        for private in (
+            "new-token",
+            "new-password",
+            "new-user",
+            "D:\\private",
+            "access token",
+            "password",
+        ):
+            self.assertNotIn(private, message)
+
+    def test_settings_change_message_is_empty_for_private_changes_only(self):
+        formatter = getattr(panel_settings, "settings_change_message", lambda *_: "")
+
+        self.assertEqual(
+            formatter(
+                {"CHANNEL_ACCESS_TOKEN": "old", "BMS_PASSWORD": "old"},
+                {"CHANNEL_ACCESS_TOKEN": "new", "BMS_PASSWORD": "new"},
+            ),
+            "",
+        )
+
+    def test_gui_manages_new_bms_and_timing_settings(self):
+        from panel_pages import FORM_SECTIONS
+        from panel_settings import ENV_FIELDS, SECRET_FIELDS
+
+        form_fields = {
+            field[0]
+            for groups in FORM_SECTIONS.values()
+            for _, fields in groups
+            for field in fields
+        }
+        for key in (
+            "BMS_USERNAME",
+            "BMS_PASSWORD",
+            "RECORDED_STEP_DELAY_SECONDS",
+        ):
+            self.assertIn(key, ENV_FIELDS)
+            self.assertIn(key, form_fields)
+        for obsolete in ("DETECTOR_INTERVAL_SEC", "LOGIN_WAIT_SECONDS"):
+            self.assertNotIn(obsolete, ENV_FIELDS)
+            self.assertNotIn(obsolete, form_fields)
+        self.assertIn("BMS_PASSWORD", SECRET_FIELDS)
+
+        values, version = self.store.load_settings()
+        self.store.save_settings(
+            values
+            | {
+                "BMS_USERNAME": "operator",
+                "BMS_PASSWORD": "private-password",
+                "RECORDED_STEP_DELAY_SECONDS": "0.2",
+            },
+            version,
+        )
+        cfg = Settings.load(self.root, environ={})
+        self.assertEqual(cfg.bms_username, "operator")
+        self.assertEqual(cfg.bms_password, "private-password")
+        self.assertEqual(cfg.recorded_step_delay_seconds, 0.2)
+
     def test_replace_failure_preserves_original_settings(self):
         values, version = self.store.load_settings()
         original = (self.root / ".env").read_bytes()

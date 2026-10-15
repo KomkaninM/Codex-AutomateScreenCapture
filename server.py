@@ -97,14 +97,10 @@ def build_bot(runtime, dispatcher):
     player = MacroPlayer(
         cfg.macros_dir,
         max_seconds=cfg.max_macro_seconds,
+        project_dir=cfg.project_dir,
     )
     detector = VisualDetector(cfg.logged_out_anchor, confidence=cfg.confidence)
-    guard = SessionGuard(
-        detector,
-        player,
-        settle_delay=cfg.settle_delay,
-        wait_seconds=cfg.login_wait_seconds,
-    )
+    guard = SessionGuard(detector, player)
     workflow = Workflow(
         runtime,
         player,
@@ -303,7 +299,9 @@ def send_online_notification(cfg, line):
             cfg.delivery_id,
             [
                 line.text(
-                    "🟢 BMS Automation Bot is online.\nSend capture to take a screenshot, or help to see commands."
+                    "🟢 BMS Automation Bot is online.\n"
+                    f"Default macro: {cfg.default_login_macro}\n"
+                    "Send capture to take a screenshot, or help to see commands."
                 )
             ],
         )
@@ -446,13 +444,17 @@ def main():
                     raise KeyboardInterrupt
                 startup_banner(cfg, bot.line)
                 bot.scheduler.start()
-                dispatcher.submit(lambda: send_online_notification(cfg, bot.line))
-                if control:
-                    control.publish(
-                        "online",
-                        port=cfg.port,
-                        webhook=cfg.public_tunnel_url + "/callback",
-                    )
+
+                def announce_online():
+                    send_online_notification(cfg, bot.line)
+                    if control:
+                        control.publish(
+                            "online",
+                            port=cfg.port,
+                            webhook=cfg.public_tunnel_url + "/callback",
+                        )
+
+                dispatcher.submit(announce_online)
                 http.run()
         except KeyboardInterrupt:
             log.info("Stopping scheduler and draining desktop transactions.")

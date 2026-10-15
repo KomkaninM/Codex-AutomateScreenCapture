@@ -16,7 +16,8 @@ from zoneinfo import ZoneInfoNotFoundError
 
 from dotenv import dotenv_values, set_key
 
-from config import Settings, macro_name
+from automation_errors import AutomationError
+from config import Settings, boolean, macro_name
 from launcher import ensure_env_file, launcher_lock
 from macro_player import MacroPlayer
 from macro_tool import convert_legacy, save_macro
@@ -30,6 +31,8 @@ ENV_FIELDS = {
     "NGROK_AUTHTOKEN": "ngrok_authtoken",
     "NGROK_DOMAIN": "ngrok_domain",
     "NGROK_EXE_PATH": "ngrok_exe_path",
+    "BMS_USERNAME": "bms_username",
+    "BMS_PASSWORD": "bms_password",
     "PORT": "port",
     "LOGIN_MACRO_SCRIPT": "default_login_macro",
     "LOGOUT_MACRO_SCRIPT": "logout_macro",
@@ -42,8 +45,7 @@ ENV_FIELDS = {
     "IMAGE_TTL_SECONDS": "image_ttl_seconds",
     "CONFIDENCE_THRESHOLD": "confidence",
     "INTERNAL_API_TOKEN": "internal_api_token",
-    "DETECTOR_INTERVAL_SEC": "detector_interval",
-    "LOGIN_WAIT_SECONDS": "login_wait_seconds",
+    "RECORDED_STEP_DELAY_SECONDS": "recorded_step_delay_seconds",
     "DESKTOP_WIDTH": "expected_width",
     "DESKTOP_HEIGHT": "expected_height",
 }
@@ -52,12 +54,48 @@ SECRET_FIELDS = {
     "LINE_CHANNEL_SECRET",
     "NGROK_AUTHTOKEN",
     "INTERNAL_API_TOKEN",
+    "BMS_PASSWORD",
 }
 ALIASES = {
     "CHANNEL_ACCESS_TOKEN": "LINE_CHANNEL_ACCESS_TOKEN",
     "LOGIN_MACRO_SCRIPT": "DEFAULT_LOGIN_MACRO",
     "NGROK_DOMAIN": "PUBLIC_TUNNEL_URL",
 }
+
+SETTING_NOTIFICATION_FIELDS = (
+    ("LOGIN_MACRO_SCRIPT", "Default login macro"),
+    ("LOGOUT_MACRO_SCRIPT", "Logout macro"),
+    ("ENABLE_AUTO_LOGOUT", "Auto logout"),
+    ("REPLY_UNKNOWN_COMMANDS", "Reply to unknown commands"),
+    ("MACRO_SETTLE_DELAY", "Page loading delay"),
+    ("MAX_MACRO_SECONDS", "Maximum macro time"),
+    ("CONFIDENCE_THRESHOLD", "Login anchor threshold"),
+    ("RECORDED_STEP_DELAY_SECONDS", "Recorded action delay"),
+    ("TIMEZONE", "Timezone"),
+    ("LINE_WEBP_QUALITY", "WebP quality"),
+    ("IMAGE_TTL_SECONDS", "Image link lifetime"),
+    ("DESKTOP_WIDTH", "Desktop width"),
+    ("DESKTOP_HEIGHT", "Desktop height"),
+    ("NGROK_DOMAIN", "ngrok domain"),
+    ("PORT", "Server port"),
+)
+
+
+def settings_change_message(before, after):
+    lines = []
+    for key, label in SETTING_NOTIFICATION_FIELDS:
+        old, new = before.get(key, ""), after.get(key, "")
+        if old == new:
+            continue
+        if key in {"ENABLE_AUTO_LOGOUT", "REPLY_UNKNOWN_COMMANDS"}:
+            try:
+                new = "Enabled" if boolean(new) else "Disabled"
+            except ValueError:
+                new = str(new)
+        elif not new:
+            new = "Not configured"
+        lines.append(f"• {label}: {new}")
+    return "⚙️ Bot settings updated\n" + "\n".join(lines) if lines else ""
 
 
 class StaleConfiguration(ValueError):
@@ -221,7 +259,9 @@ class ProjectStore:
         ):
             try:
                 steps = MacroPlayer(
-                    cfg.macros_dir, max_seconds=cfg.max_macro_seconds
+                    cfg.macros_dir,
+                    max_seconds=cfg.max_macro_seconds,
+                    project_dir=cfg.project_dir,
                 ).load(path.name)
                 result.append(
                     {
@@ -231,7 +271,7 @@ class ProjectStore:
                         "modified": path.stat().st_mtime,
                     }
                 )
-            except (OSError, ValueError):
+            except (OSError, ValueError, AutomationError):
                 result.append(
                     {"name": path.name, "steps": "—", "valid": False, "modified": 0}
                 )
@@ -312,11 +352,13 @@ class ProjectStore:
             [("Logout macro", cfg.logout_macro)] if cfg.auto_logout else []
         ):
             try:
-                MacroPlayer(cfg.macros_dir, max_seconds=cfg.max_macro_seconds).load(
-                    name
-                )
+                MacroPlayer(
+                    cfg.macros_dir,
+                    max_seconds=cfg.max_macro_seconds,
+                    project_dir=cfg.project_dir,
+                ).load(name)
                 add(label, True, name)
-            except (OSError, ValueError):
+            except (OSError, ValueError, AutomationError):
                 add(
                     label,
                     False,

@@ -68,11 +68,13 @@ class RecordedMacro:
         name="Recorded BMS Macro",
         clock=time.monotonic,
         clipboard=None,
+        step_delay=0.2,
     ):
         self.width, self.height = width, height
         self.name = name
         self.clock = clock
         self.clipboard = clipboard
+        self.step_delay = step_delay
         self.recording = False
         self.finished = False
         self.cancelled = False
@@ -97,10 +99,6 @@ class RecordedMacro:
 
     def stop(self):
         with self._lock:
-            if self.recording and self._steps:
-                self._steps[-1]["delay"] = round(
-                    max(0, self.clock() - self._last_at), 3
-                )
             self.recording = False
             self.finished = True
 
@@ -128,9 +126,7 @@ class RecordedMacro:
                 raise ValueError(
                     "Recording exceeds 1000 steps; record a shorter macro."
                 )
-            if self._steps:
-                self._steps[-1]["delay"] = round(gap, 3)
-            self._steps.append({**step, "delay": 0.0})
+            self._steps.append({**step, "delay": self.step_delay})
         self._last_at = now
 
     def click(self, x, y, button):
@@ -221,7 +217,7 @@ class RecordedMacro:
             }
 
 
-def record_macro(name, width, height, *, max_seconds=35):
+def record_macro(name, width, height, *, max_seconds=35, step_delay=0.2):
     if sys.platform != "win32":
         raise RuntimeError("Live recording requires your Windows desktop.")
     from macro_player import enable_dpi_awareness
@@ -230,7 +226,13 @@ def record_macro(name, width, height, *, max_seconds=35):
     from pynput import keyboard, mouse
     import pyperclip
 
-    rec = RecordedMacro(width, height, name=name, clipboard=pyperclip.paste)
+    rec = RecordedMacro(
+        width,
+        height,
+        name=name,
+        clipboard=pyperclip.paste,
+        step_delay=step_delay,
+    )
     errors = []
     pressed_buttons = {}
 

@@ -20,7 +20,7 @@ from detector import SessionGuard, SessionState
 from event_ledger import EventLedger
 from scheduler import Scheduler, parse_interval
 from line_api import LineAPI
-from commands import parse_command
+from commands import HELP, parse_command
 from workflow import Workflow
 from server import create_app, Dispatcher
 
@@ -62,6 +62,36 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(cfg.port, 8000)
         self.assertFalse(cfg.auto_logout)
         (self.root / ".env").write_text("ENABLE_AUTO_LOGOUT=maybe\n")
+        with self.assertRaises(ValueError):
+            Settings.load(self.root, environ={})
+
+    def test_bms_credentials_load_from_private_environment(self):
+        (self.root / ".env").write_text(
+            "BMS_USERNAME=operator\nBMS_PASSWORD=private-password\n"
+        )
+
+        cfg = Settings.load(self.root, environ={})
+
+        self.assertEqual(getattr(cfg, "bms_username", None), "operator")
+        self.assertEqual(getattr(cfg, "bms_password", None), "private-password")
+
+    def test_operator_timing_and_image_defaults(self):
+        cfg = Settings.load(self.root, environ={})
+
+        self.assertEqual(cfg.max_macro_seconds, 10)
+        self.assertFalse(hasattr(cfg, "login_wait_seconds"))
+        self.assertFalse(hasattr(cfg, "detector_interval"))
+        self.assertEqual(cfg.line_webp_quality, 80)
+
+    def test_obsolete_login_wait_settings_are_ignored_and_recording_delay_validates(self):
+        (self.root / ".env").write_text(
+            "DETECTOR_INTERVAL_SEC=0.1\nRECORDED_STEP_DELAY_SECONDS=0.2\n"
+        )
+        cfg = Settings.load(self.root, environ={})
+        self.assertFalse(hasattr(cfg, "detector_interval"))
+        self.assertEqual(getattr(cfg, "recorded_step_delay_seconds", None), 0.2)
+
+        (self.root / ".env").write_text("RECORDED_STEP_DELAY_SECONDS=-0.1\n")
         with self.assertRaises(ValueError):
             Settings.load(self.root, environ={})
 
@@ -206,16 +236,108 @@ class CoreTests(unittest.TestCase):
 
     def test_detector_unknown_blocks_and_target_replaces_default_login(self):
         player = Mock()
-        states = iter([SessionState.LOGGED_OUT, SessionState.LOGGED_IN])
-        guard = SessionGuard(Mock(state=lambda: next(states)), player, settle_delay=0)
+        detector = Mock(
+            state=Mock(side_effect=[SessionState.LOGGED_OUT, SessionState.LOGGED_IN])
+        )
+        guard = SessionGuard(detector, player)
         used = guard.ensure("login.json", "DH07C.json")
         self.assertTrue(used)
         player.play.assert_called_once_with("DH07C.json")
-        guard = SessionGuard(
-            Mock(state=lambda: SessionState.UNKNOWN), player, settle_delay=0
-        )
+        detector.state.assert_called_once_with()
+        guard = SessionGuard(Mock(state=lambda: SessionState.UNKNOWN), player)
         with self.assertRaises(RuntimeError):
             guard.ensure("login.json")
+
+    def test_login_guard_does_not_rescan_after_the_login_macro(self):
+        detector = Mock(
+            state=Mock(side_effect=[SessionState.LOGGED_OUT, SessionState.LOGGED_IN])
+        )
+        player = Mock()
+        guard = SessionGuard(detector, player)
+
+        self.assertTrue(guard.ensure("login.json"))
+
+        player.play.assert_called_once_with("login.json")
+        detector.state.assert_called_once_with()
+
+    def test_macro_wait_image_appears_then_continues_remaining_steps(self):
+        macros = self.root / "scripts" / "macros"
+        assets = self.root / "assets"
+        macros.mkdir(parents=True)
+        assets.mkdir()
+        Image.new("RGB", (4, 4), "red").save(assets / "ready.png")
+        (macros / "a.json").write_text(
+            json.dumps(
+                {
+                    "steps": [
+                        {
+                            "action": "wait_image",
+                            "image": "assets/ready.png",
+                            "condition": "appear",
+                            "timeout": 5,
+                            "poll_interval": 0.1,
+                            "confidence": 0.9,
+                            "consecutive_matches": 2,
+                        },
+                        {"action": "click", "x": 10, "y": 20},
+                    ]
+                }
+            )
+        )
+        gui = Mock()
+        with patch(
+            "detector.image_visible", side_effect=[False, True, True], create=True
+        ) as match:
+            try:
+                MacroPlayer(macros, gui=gui, sleep=lambda _: None).play("a.json")
+            except ValueError as exc:
+                self.fail(f"wait_image should be supported: {exc}")
+
+        self.assertEqual(match.call_count, 3)
+        gui.click.assert_called_once()
+
+    def test_wait_image_uses_its_own_timeout_outside_macro_input_budget(self):
+        macros = self.root / "scripts" / "macros"
+        assets = self.root / "assets"
+        macros.mkdir(parents=True)
+        assets.mkdir()
+        Image.new("RGB", (4, 4), "red").save(assets / "ready.png")
+        (macros / "a.json").write_text(
+            json.dumps(
+                {
+                    "steps": [
+                        {
+                            "action": "wait_image",
+                            "image": "assets/ready.png",
+                            "condition": "appear",
+                            "timeout": 60,
+                            "poll_interval": 0.5,
+                            "consecutive_matches": 2,
+                        },
+                        {"action": "click", "x": 1, "y": 2},
+                    ]
+                }
+            )
+        )
+        clock = [0.0]
+
+        def sleep(seconds):
+            clock[0] += seconds
+
+        gui = Mock()
+        visible = [False, False, False, True, True]
+        with patch("macro_player.time.monotonic", side_effect=lambda: clock[0]), patch(
+            "detector.image_visible", side_effect=visible, create=True
+        ):
+            try:
+                MacroPlayer(
+                    macros, gui=gui, sleep=sleep, max_seconds=1
+                ).play("a.json")
+            except ValueError as exc:
+                self.fail(f"wait_image should be supported: {exc}")
+
+        self.assertGreater(clock[0], 1)
+        gui.click.assert_called_once()
 
     def test_workflow_serializes_and_leaves_session_open_on_capture_failure(self):
         active = []
@@ -249,6 +371,21 @@ class CoreTests(unittest.TestCase):
             wf.capture()
         player.play.assert_not_called()
 
+    def test_workflow_keeps_page_settle_delay_after_macro_completion(self):
+        runtime = RuntimeConfig(Settings(project_dir=self.root, settle_delay=2))
+        order = []
+        player = Mock()
+        player._wait.side_effect = lambda *args: order.append("settle")
+        guard = Mock()
+        guard.ensure.side_effect = lambda *args, **kwargs: order.append("macro") or True
+        capture = Mock()
+        capture.capture.side_effect = lambda *args: order.append("capture") or "shot"
+        workflow = Workflow(runtime, player, guard, capture)
+
+        self.assertEqual(workflow.capture(), "shot")
+
+        self.assertEqual(order, ["macro", "settle", "capture"])
+
     def test_command_parser_schedule_and_target_note(self):
         cmd = parse_command(
             "capture 07C generator status --starttime 15:30:00", {"07C": {}}
@@ -263,6 +400,62 @@ class CoreTests(unittest.TestCase):
                 parse_interval(bad)
         with self.assertRaises(ValueError):
             parse_command("capture --starttime 25:90", {})
+
+    def test_start_capture_short_and_long_options_are_equivalent(self):
+        commands = (
+            "start-capture 30m generator room -s 11:30 -m 10",
+            "start-capture 30m generator room -m 10 -s 11:30",
+            "start-capture 30m generator room --starttime 11:30 --max 10",
+            "start-capture 30m generator room --max 10 --starttime 11:30:00",
+            "start-capture 30m generator room -s 11:30:00 --max 10",
+            "start-capture 30m generator room --starttime 11:30 -m 10",
+        )
+
+        for text in commands:
+            with self.subTest(text=text):
+                command = parse_command(text, {})
+                self.assertEqual(command.interval, 1800)
+                self.assertEqual(command.note, "generator room")
+                self.assertEqual(command.starttime, "11:30:00")
+                self.assertEqual(getattr(command, "max_captures", None), 10)
+
+    def test_start_capture_without_options_remains_unlimited(self):
+        command = parse_command("start-capture 30m generator room", {})
+
+        self.assertEqual(command.note, "generator room")
+        self.assertIsNone(command.starttime)
+        self.assertIsNone(getattr(command, "max_captures", None))
+
+    def test_existing_single_dash_note_words_remain_compatible(self):
+        command = parse_command("start-capture 30m generator -daily", {})
+
+        self.assertEqual(command.note, "generator -daily")
+
+    def test_start_capture_rejects_invalid_or_missing_option_values(self):
+        invalid = {
+            "start-capture 30m note -m": "maximum",
+            "start-capture 30m note --max": "maximum",
+            "start-capture 30m note -m 0": "positive integer",
+            "start-capture 30m note -m -5": "positive integer",
+            "start-capture 30m note -m abc": "positive integer",
+            "start-capture 30m note -m 1.5": "positive integer",
+            "start-capture 30m note -s": "start time",
+            "start-capture 30m note --starttime": "start time",
+            "start-capture 30m note -s 25:99": "HH:MM",
+            "start-capture 30m note -s 11:30 -s 12:30": "once",
+            "start-capture 30m note -m 2 --max 3": "once",
+        }
+
+        for text, message in invalid.items():
+            with self.subTest(text=text), self.assertRaisesRegex(
+                ValueError, "(?i)" + message
+            ):
+                parse_command(text, {})
+
+    def test_line_help_prefers_short_schedule_options_and_documents_long_aliases(self):
+        self.assertIn("start-capture 30m [note] [-s HH:MM[:SS]] [-m count]", HELP)
+        self.assertIn("--starttime", HELP)
+        self.assertIn("--max", HELP)
 
     def test_scheduler_precheck_ten_seconds_early_and_stop_cancels_dispatch(self):
         now = datetime.fromisoformat("2026-10-09T15:00:00+07:00")
@@ -293,6 +486,42 @@ class CoreTests(unittest.TestCase):
         scheduler.stop_all()
         pending.pop(0)()
         self.assertEqual(calls, ["precheck"])
+
+    def test_scheduler_can_cancel_one_job_without_stopping_others(self):
+        now = datetime.fromisoformat("2026-10-09T15:00:00+07:00")
+        scheduler = Scheduler(Mock(), clock=lambda: now)
+        first = scheduler.add(30, now + timedelta(seconds=30), Mock(), Mock())
+        second = scheduler.add(60, now + timedelta(seconds=60), Mock(), Mock())
+
+        self.assertTrue(scheduler.cancel(first))
+
+        self.assertNotIn(first, scheduler.jobs)
+        self.assertIn(second, scheduler.jobs)
+        self.assertFalse(scheduler.cancel(first))
+
+    def test_scheduler_paused_job_waits_until_resumed(self):
+        now = datetime.fromisoformat("2026-10-09T15:00:00+07:00")
+        pending = []
+
+        def dispatch(fn):
+            pending.append(fn)
+            return Future()
+
+        scheduler = Scheduler(dispatch, clock=lambda: now)
+        job_id = scheduler.add(
+            30,
+            now + timedelta(seconds=30),
+            Mock(),
+            Mock(),
+            paused=True,
+        )
+
+        scheduler.tick(now + timedelta(seconds=30))
+        self.assertEqual(pending, [])
+        self.assertTrue(scheduler.resume(job_id))
+        scheduler.tick(now + timedelta(seconds=30))
+        self.assertEqual(len(pending), 1)
+        self.assertFalse(scheduler.resume("missing"))
 
     def test_line_reply_and_push_are_separate_and_images_use_jpeg(self):
         transport = Mock()

@@ -1,4 +1,4 @@
-"""Detect BMS session timeouts using the login-page anchor alone."""
+"""Reusable screen-image matching and login-page session detection."""
 
 from enum import Enum
 import logging
@@ -15,6 +15,40 @@ class SessionState(Enum):
     UNKNOWN = "unknown"
 
 
+def image_visible(image_path: Path, *, confidence=0.9, grab=None) -> bool:
+    """Return whether an image matches the primary screen; detection errors raise."""
+    image_path = Path(image_path)
+    if not image_path.is_file():
+        raise AutomationError(f"Reference image was not found: {image_path}")
+    try:
+        from PIL import Image
+        from capture import primary_screen
+        import cv2
+        import numpy as np
+
+        screen = cv2.cvtColor(
+            np.asarray((grab or primary_screen)().convert("RGB")),
+            cv2.COLOR_RGB2GRAY,
+        )
+        with Image.open(image_path) as image:
+            anchor = cv2.cvtColor(
+                np.asarray(image.convert("RGB")), cv2.COLOR_RGB2GRAY
+            )
+        if anchor.shape[0] > screen.shape[0] or anchor.shape[1] > screen.shape[1]:
+            return False
+        if np.ptp(anchor) == 0:
+            error = cv2.matchTemplate(screen, anchor, cv2.TM_SQDIFF_NORMED)
+            return float(error.min()) <= (1 - confidence)
+        scores = cv2.matchTemplate(screen, anchor, cv2.TM_CCOEFF_NORMED)
+        return float(scores.max()) >= confidence
+    except AutomationError:
+        raise
+    except Exception as exc:
+        raise AutomationError(
+            f"Could not read or match reference image: {image_path} ({type(exc).__name__})"
+        ) from exc
+
+
 class VisualDetector:
     def __init__(self, logged_out: Path, *, confidence=0.8, grab=None):
         self.logged_out = Path(logged_out)
@@ -26,27 +60,9 @@ class VisualDetector:
             raise AutomationError(
                 "Configure assets/login_anchor.png (or assets/login-anchor.png) before desktop automation."
             )
-        from PIL import Image
-        from capture import primary_screen
-        import cv2
-        import numpy as np
-
-        screen = cv2.cvtColor(
-            np.asarray((self.grab or primary_screen)().convert("RGB")),
-            cv2.COLOR_RGB2GRAY,
+        matched = image_visible(
+            self.logged_out, confidence=self.confidence, grab=self.grab
         )
-        with Image.open(self.logged_out) as image:
-            anchor = cv2.cvtColor(np.asarray(image.convert("RGB")), cv2.COLOR_RGB2GRAY)
-        if anchor.shape[0] > screen.shape[0] or anchor.shape[1] > screen.shape[1]:
-            return SessionState.LOGGED_IN
-        if np.ptp(anchor) == 0:
-            # Correlation is undefined for a flat template; compare pixel error.
-            error = cv2.matchTemplate(screen, anchor, cv2.TM_SQDIFF_NORMED)
-            matched = float(error.min()) <= (1 - self.confidence)
-        else:
-            # Match PyAutoGUI/PyScreeze's OpenCV grayscale correlation method.
-            scores = cv2.matchTemplate(screen, anchor, cv2.TM_CCOEFF_NORMED)
-            matched = float(scores.max()) >= self.confidence
         if matched:
             return SessionState.LOGGED_OUT
         # Single-anchor mode assumes the visible BMS session is active when
@@ -55,11 +71,9 @@ class VisualDetector:
 
 
 class SessionGuard:
-    def __init__(self, detector, player, *, settle_delay=2, wait_seconds=5):
+    def __init__(self, detector, player):
         self.detector = detector
         self.player = player
-        self.settle_delay = settle_delay
-        self.wait_seconds = wait_seconds
 
     def ensure(self, default_macro, target_macro=None, *, deadline=None, cancel=None):
         state = self.detector.state()

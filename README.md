@@ -11,7 +11,7 @@ Double-click **`start_gui.bat`** to open the native control panel. It reuses the
 | Page | What you can do |
 | --- | --- |
 | **Dashboard** | Start/stop the bot, see setup checks and live logs, copy the webhook URL, check LINE quota, open the reports folder. |
-| **Settings** | Edit LINE/ngrok credentials, optional group/private IDs, default login/logout macros, auto-logout, loading delay, timezone, WebP quality, and advanced options. |
+| **Settings** | Edit LINE/ngrok and BMS credentials, optional group/private IDs, login/logout macros, image matching, recording delay, timezone, WebP quality, and advanced options. |
 | **Targets** | Add, edit, and remove target IDs/descriptions/macros in `targets.json`. |
 | **Macros** | Record/play a macro, import current or legacy JSON, select login/logout defaults, and import the login-page anchor crop. |
 | **Help** | Follow the first-run setup guide and find LINE command examples. |
@@ -26,11 +26,11 @@ For your existing installation:
 
 Credentials are masked until you click **Show**. GUI launches use the project `.env`, without inherited Windows environment overrides. `GROUP_ID` remains optional and takes priority over `USER_ID`; both blank allow `check-id` discovery. An invalid existing setting can be corrected in the forms before startup.
 
-Click **Save settings** while stopped, or **Save & Restart Bot** for an owned running bot. Restart validates the form before stopping, drains active work, saves, and starts again. Save target changes while stopped. Editing is briefly disabled while a save/restart is in progress so newer changes cannot be overwritten by completion. Changes are not silently saved on exit. Other running launchers or macro players prevent file writes.
+Click **Save & Apply** after editing settings. If the bot is online, the app validates the form, drains active work, safely stops the owned process, writes `.env`, and starts the bot again with the complete new configuration. You do not need to stop it yourself. One LINE push lists changed operational values such as macros, auto logout, timing, timezone, and image quality. Tokens, secrets, passwords, local paths, BMS usernames, and recipient IDs are never included. Secret-only changes do not produce a notification, and a notification failure does not prevent the saved configuration from restarting. Save target changes while stopped. Editing is briefly disabled while an apply is in progress so newer changes cannot be overwritten. Changes are not silently saved on exit. Other running launchers or macro players prevent file writes.
 
 Settings/target writes preserve unknown values and existing comments, reject stale forms, keep private backups under `.runtime/backups`, and replace files atomically. If OneDrive or permissions prevent replacement, the original file remains intact. Reload a form if LINE's `set-login` or another editor changed its file. Existing legacy variable aliases are updated alongside their canonical fields, including when clearing a value.
 
-Macro import accepts your existing `click_coord`, `type_text`, `press_key`, and post-delay schema and converts it through the same validated macro engine. Existing filenames are preserved; choose a new name for another recording/import. **Use for login/logout** selects the macro in Settings; save there to apply. The recorder uses **F8** to start/stop/export and **F9** to cancel. Playback gives five seconds to switch to BMS. Recorded text/passwords are not displayed in the macro list or included in logs. Selecting a login anchor replaces `assets/login_anchor.png` and keeps a private backup of the previous image.
+Macro import accepts your existing `click_coord`, `type_text`, `press_key`, `wait_image`, and post-delay schema and converts it through the same validated macro engine. Existing filenames are preserved; choose a new name for another recording/import. **Use for login/logout** selects the macro in Settings; save there to apply. The recorder uses **F8** to start/stop/export and **F9** to cancel. Playback gives three seconds to switch to BMS. Recorded text/passwords are not displayed in the macro list or included in logs. Selecting a login anchor replaces `assets/login_anchor.png` and keeps a private backup of the previous image.
 
 **Stop Bot** lets active capture/delivery/logout finish, then closes the server and only the ngrok process this launcher started. It leaves an external tunnel running. Closing the app asks before stopping active work or discarding unsaved changes. GUI shutdown uses a random per-run local control file, without exposing an HTTP shutdown endpoint. Live logs are bounded, credentials are redacted, and the latest log is saved to `.runtime/control_panel.log`.
 
@@ -55,7 +55,7 @@ Use **single quotes** around Windows paths so backslashes are preserved; spaces 
 
 `LINE_CHANNEL_SECRET` is required for this bot. Find it in **LINE Developers → your Messaging API channel → Basic settings → Channel secret**. The access token authorizes outgoing messages; the channel secret verifies that incoming webhooks came from LINE. Keep both in your private `.env`. `PUBLIC_TUNNEL_URL` is unnecessary when `NGROK_DOMAIN` is set. Older configurations containing it still work as a fallback; the domain takes precedence when both are present.
 
-When upgrading an existing installation, edit your existing `.env` to add `NGROK_EXE_PATH` and change `IMAGE_TTL_SECONDS=604800` to `IMAGE_TTL_SECONDS=0` for image links without an expiration. The launcher preserves your file rather than replacing it with the new template. You can remove old `PUBLIC_TUNNEL_URL` and `CLOSE_MENU_MACRO` entries. All saved screenshots remain on disk for reporting regardless of the link expiry setting.
+When upgrading an existing installation, edit your existing `.env` to add `NGROK_EXE_PATH` and change `IMAGE_TTL_SECONDS=604800` to `IMAGE_TTL_SECONDS=0` for image links without an expiration. The launcher preserves your file rather than replacing it with the new template. You can remove old `PUBLIC_TUNNEL_URL`, `CLOSE_MENU_MACRO`, `DETECTOR_INTERVAL_SEC`, and `LOGIN_WAIT_SECONDS` entries. The last two were replaced by per-step `wait_image` settings. All saved screenshots remain on disk for reporting regardless of the link expiry setting.
 
 The launcher prints the exact webhook URL to enter in LINE Developers. Enable Use webhook and Webhook redelivery there. For group use, invite the bot to your group; for private use, add the bot as a LINE friend. With both IDs blank, send `check-id` in either chat, copy the desired group ID or user ID into `.env`, then relaunch. It does not change LINE account settings automatically. Keep the BMS desktop awake and unlocked, and record your BMS macros/reference images as described below.
 
@@ -98,7 +98,7 @@ The template follows the variable names and defaults in the supplied Python conf
 1. Keep the BMS window positioned as it was during recording. Playback sends the recorded click coordinates directly to PyAutoGUI; it does not resize them, compare display resolutions, or require 100% Windows scaling. Per-monitor DPI awareness is enabled for both recording and playback. `DESKTOP_WIDTH`/`DESKTOP_HEIGHT` supply optional metadata when importing old macros and do not control playback or screenshot size. Capture uses the current primary monitor.
 2. Configure Windows power and security policies to keep the display awake and desktop unlocked during operation. A disconnected/locked RDP session can remove or change the graphical desktop; validate your chosen console/session arrangement. Run under a dedicated operator account with the permissions BMS needs.
 3. Create `scripts/macros/login_bms.json`, `DH07C.json`, and `DH07D.json` using your BMS coordinates. Create `logout.json` only if you enable auto-logout. Adjust `targets.json` to match your deployment. Target macros must work from both the logged-out screen and the logged-in screen: when logged out, they replace the default login and navigation entirely. Ad-hoc macros also validate the session, running the default login first when necessary. No BMS coordinates are fabricated in this repository.
-4. Save a tight, distinctive crop of a control on the BMS login page as `assets/login_anchor.png` or `assets/login-anchor.png`, recorded at the same scaling/resolution as your desktop. If both exist, `login_anchor.png` takes precedence. This is the only reference image required. The bot checks it **once before capture** using OpenCV grayscale correlation, matching the prototype/PyAutoGUI approach. If found, plain `capture` runs the default login macro once; if absent, it skips login and captures immediately. After a macro and `MACRO_SETTLE_DELAY`, it captures without requiring the anchor to disappear or scanning again. A requested target uses its full macro once as the login/navigation replacement, just as in the prototype. Missing/unreadable anchor files remain configuration errors; an anchor larger than the screen is simply not found. Keep the BMS visible on the primary desktop. Set `CONFIDENCE_THRESHOLD` after testing both the login page and your normal BMS screen. `DETECTOR_INTERVAL_SEC` and `LOGIN_WAIT_SECONDS` are retained for legacy configuration compatibility; there is no idle detector loop or post-login polling. Scheduled prechecks can check the anchor ten seconds early; the actual capture transaction checks it once when it runs.
+4. Save a tight, distinctive crop of a control on the BMS login page as `assets/login_anchor.png` or `assets/login-anchor.png`, recorded at the same scaling/resolution as your desktop. If both exist, `login_anchor.png` takes precedence. The bot checks it once before a capture using OpenCV grayscale correlation. If found, plain `capture` runs the default login macro once; a requested target runs its full target macro as the login/navigation replacement. If the anchor is absent initially, the login macro is skipped. There is no automatic image check after a macro finishes. Put an explicit `wait_image` step at the exact point where a slow login or page transition must pause. Missing/unreadable login anchors remain configuration errors; an anchor larger than the screen is treated as absent. Keep the BMS visible on the primary desktop. `CONFIDENCE_THRESHOLD` controls only this initial login check; each `wait_image` supplies its own confidence. Scheduled prechecks use the same one-time session check, and the capture transaction rechecks the session when it runs.
 5. For manual startup, launch ngrok separately, for example `ngrok http --domain=<your-reserved-domain> 5000`, using its official CLI and your securely configured authentication. `server.py` does not start ngrok; the one-click launcher does. Enable webhooks and disable LINE Official Account automatic responses that conflict with this bot. Configure LINE's webhook URL as `https://<your-domain>/callback`.
 6. Start the bot:
 
@@ -114,8 +114,11 @@ The template follows the variable names and defaults in the supplied Python conf
 | --- | --- |
 | `capture` | Capture the current screen, logging in with the default macro if needed. |
 | `capture 07C [note]` | Use the target macro, save under `screenshots/07C`, and reply with an image. |
-| `capture [target] [note] --starttime 15:30:00` | Acknowledge now; one-time scheduled push at the next occurrence of this time. |
-| `start-capture 30m [target] [note] [--starttime 15:30]` | Recurring scheduled pushes; otherwise first capture is one interval from now. |
+| `capture [target] [note] -s 15:30` | Acknowledge now; one-time scheduled push at the next occurrence of this time. `--starttime` is also supported. |
+| `start-capture 30m [target] [note]` | Reply immediately with capture #0, then send recurring pushes starting at #1. |
+| `start-capture 30m [target] [note] -s 15:30` | Acknowledge now; begin recurring pushes with capture #1 at the requested time. |
+| `start-capture 30m [target] [note] -m 10` | Stop after ten successfully accepted pictures, counting immediate capture #0. |
+| `start-capture 30m [target] [note] -s 15:30 -m 10` | Start at 15:30 with capture #1 and stop after ten successful pictures. Long aliases `--starttime` and `--max` are also supported. |
 | `stop-capture` | Cancel all schedules, including queued capture/precheck work. |
 | `set-login DH07A.json` | Validate a local macro, update the default, and persist to `.env`. |
 | `login` | Validate/recover the BMS session with the current login macro. |
@@ -125,11 +128,11 @@ The template follows the variable names and defaults in the supplied Python conf
 | `check-quota` | Reply with monthly limit, consumption, remaining quota, and recipient reach information. |
 | `help` | Show command usage. |
 
-Quote notes when needed. Macro names can omit `.json`; path traversal and arbitrary shell commands are rejected. Intervals use `s`, `m`, or `h` and must be between ten seconds and 365 days. Local schedule times use `TIMEZONE` (default `Asia/Bangkok`); a time already passed means tomorrow. Schedules are **in memory** and must be recreated after restart. Missed intervals are skipped rather than replayed as a backlog. Prechecks run ten seconds early on a best-effort basis; a busy desktop can delay them and the capture. Capture waits for its own precheck to finish. Each capture transaction checks the anchor once before navigation; there are no post-navigation relogin retries or visual completion checks. `stop-capture` cancels immediately at authenticated ingress and invalidates older queued schedule registrations. A push already sent to LINE cannot be recalled. If the acknowledgement queue is saturated, cancellation still succeeds but its reply may be omitted; the completed stop remains deduplicated.
+Quote notes when needed. Macro names can omit `.json`; path traversal and arbitrary shell commands are rejected. Intervals use `s`, `m`, or `h` and must be between ten seconds and 365 days. `-s` accepts `HH:MM` or `HH:MM:SS`; omitted seconds are interpreted as `00`. `-m` accepts only a positive integer. Local schedule times use `TIMEZONE` (default `Asia/Bangkok`); a time already passed means tomorrow. Schedules are **in memory** and must be recreated after restart. Missed intervals are skipped rather than replayed as a backlog. Prechecks run ten seconds early on a best-effort basis; a busy desktop can delay them and the capture. Capture waits for its own precheck to finish. Each capture transaction checks the login anchor once before navigation. Any later image-based pause occurs only where that macro contains `wait_image`. There are no repeated login macros or implicit post-macro waits. `stop-capture` cancels immediately at authenticated ingress, interrupts an active `wait_image`, and invalidates older queued schedule registrations. A push already sent to LINE cannot be recalled. If the acknowledgement queue is saturated, cancellation still succeeds but its reply may be omitted; the completed stop remains deduplicated.
 
-iPhone smart punctuation is supported: `capture daily report —starttime 15:30` and `start-capture 30m daily report —starttime 15:30` work just like their `--starttime` equivalents. The en dash spelling `–starttime` also works. Dashes elsewhere in your note are preserved.
+iPhone smart punctuation is supported: `capture daily report —starttime 15:30` and `start-capture 30m daily report —starttime 15:30` work like `--starttime`. The en dash spelling `–starttime` also works. The shorter `-s` form avoids smart-punctuation replacement. Dashes elsewhere in your note are preserved.
 
-Every image delivery includes a text caption with the actual capture timestamp in `TIMEZONE` and an optional `Note:` line. For example, `capture daily report` sends:
+Every image delivery includes a text caption with the actual capture timestamp in `TIMEZONE` and an optional `Note:` line. Targeted captures also show the target ID and macro filename. For example, `capture daily report` sends:
 
 ```text
 Capture
@@ -137,21 +140,25 @@ Timestamp: 2026-10-10 15:30:00 (Asia/Bangkok)
 Note: daily report
 ```
 
-Scheduled images use `Scheduled capture #1`, `Scheduled capture #2`, and so on. Each schedule has its own counter, starting at #1, including one-time captures. The number advances after LINE accepts the image request; failed captures/sends do not consume a number, and logout failure after acceptance still counts the delivered image. A new schedule starts over at #1. Captions and images share one reply/push request.
+`start-capture` without `-s`/`--starttime` replies with a structured schedule summary followed by `Scheduled capture #0` and its image. The summary shows the schedule code, readable local start time, interval, target, macro, optional maximum, and optional note. This initial image uses the command's free `replyToken`; recurring pushes begin with `Scheduled capture #1`, then #2, and so on. With `-s`/`--starttime`, the reply contains only the schedule summary and the first pushed image at that time is #1. One-time scheduled captures also begin at #1 when due. Each schedule has its own capture-number counter.
 
-All interactive commands use `replyToken`, including `login` and `macro`, following the strict quota invariant. Scheduled deliveries have no reply token and use `pushMessage`; group recipient reach scales quota use. Multiple message objects in one delivery are sent in a single API request. LINE replies do not count toward monthly push quota. Failed/expired replies **never** fall back to a paid push. Start the interactive image request within 45 seconds of webhook receipt; logout happens after delivery acceptance and can finish afterward. Before starting input, the macro player checks that its recorded waits fit the remaining time. Timeout diagnostics report the step, elapsed time, and whether `MAX_MACRO_SECONDS` or the LINE reply deadline was limiting the run. Keep capture preparation below that deadline; queued interactive work expires after 45 seconds to leave margin for LINE token validity. For longer workflows use scheduling, or shorten macros. `MAX_MACRO_SECONDS` can be increased in `.env` for standalone/scheduled work, but it does not extend the interactive reply deadline. Expired commands may be dropped and require the operator to retry.
+`-m N` and `--max N` stop a recurring schedule after exactly N successful picture deliveries. Immediate #0 counts as the first success; a timed schedule has no #0. Failed screenshots and unaccepted sends do not consume the limit, and each schedule maintains its own count. Normal image captions do not show progress. After the final capture and auto-logout attempt, the bot removes that schedule and sends one `Capture Schedule Completed` push with `Pictures Sent: N/N`. Manual cancellation and unlimited schedules do not send this completion message.
+
+If an explicit `wait_image` step times out during a scheduled capture, the bot sends one structured LINE push containing the schedule code, timestamp, target, macro, note, image path, and `appear` or `disappear` condition. A recurring schedule remains active and retries at its next interval; a one-time schedule ends without a picture. The failed attempt does not count toward `-m`. This failure notification uses push quota. Manual cancellation does not send a timeout notification. A normal interactive `capture` reports the same timeout details through its free reply token instead of push.
+
+All interactive commands use `replyToken`, including `login` and `macro`, following the strict quota invariant. Scheduled deliveries have no reply token and use `pushMessage`; group recipient reach scales quota use. Multiple message objects in one delivery are sent in a single API request. LINE replies do not count toward monthly push quota. Failed/expired replies **never** fall back to a paid push. Start the interactive image request within 45 seconds of webhook receipt; logout happens after delivery acceptance and can finish afterward. Before starting input, the macro player checks that fixed delays fit the remaining time. `wait_image` has its own per-step timeout and pauses the `MAX_MACRO_SECONDS` input budget, but cancellation and the interactive LINE deadline still take priority. Timeout diagnostics report the macro step, image, condition, elapsed time, check count, and limiting deadline. For a full 60-second wait, use a scheduled or standalone macro rather than an interactive reply. Expired commands may be dropped and require the operator to retry.
 
 Closing a menu collapses a navigation panel; logout ends the BMS session. There is no `close-menu` command or required close-menu macro. `ENABLE_AUTO_LOGOUT=True` runs `LOGOUT_MACRO_SCRIPT` only after LINE accepts the captured image request. It runs the logout macro without a post-logout anchor check; leave it `False` if you want the BMS session to stay open. No `logout_anchor.png` is needed. Set the flag in `.env` or send `enable-autologout` after recording `scripts/macros/logout.json`. Failed capture, canceled work before delivery, and failed/unconfirmed LINE requests leave the BMS session open. The console logs when image sending starts, when LINE accepts it, and when logout starts. LINE acceptance confirms the API request succeeded; the API does not provide confirmation that the recipient viewed/downloaded the image. The UI lock covers capture, delivery waiting, and logout, so another macro cannot interrupt this transaction. Image requests wait up to five seconds to connect and thirty seconds for a response; replies remain single-attempt and scheduled pushes retain their retry key.
 
 ### When capture fails
 
-Desktop setup/session and macro timing checks report their specific reason in LINE and the launcher console while a reply is still possible. If the interactive deadline expires, read the console for the exact timing failure. For a missing anchor, save a distinctive login-page crop as `assets/login_anchor.png` or `assets/login-anchor.png`. If the macro finishes but the page loads slowly, increase `MACRO_SETTLE_DELAY` or adjust recorded pauses. The bot captures after that delay without requiring a visual login confirmation. Restart after changing `.env` or display settings. A timeout during macro playout occurs before LINE image delivery; network response waiting is a separate stage.
+Desktop setup/session and macro timing checks report their specific reason in LINE and the launcher console while a reply is still possible. If the interactive deadline expires, read the console for the exact timing failure. For a missing pre-check anchor, save a distinctive login-page crop as `assets/login_anchor.png` or `assets/login-anchor.png`. For a slow login, add a `wait_image` step after submitting credentials and choose its timeout and polling interval in JSON. A failed or timed-out wait stops the macro before capture; there is no fallback screenshot. After the macro completes, `MACRO_SETTLE_DELAY` still provides the final page-rendering pause. Restart after changing `.env` or display settings. Network response waiting is a separate stage.
 
 Unexpected failures still receive a generic LINE response; the console records the exception type and Python function/line locations. Copy that log line for diagnosis. Exception contents, macro text, and local variables are excluded from those diagnostics.
 
 LINE exposes group **member count**, not each member's block status. The dashboard labels membership as an upper bound instead of inventing an unblocked target reach. The wrapper also supports daily follower insights and eligible-account follower ID enumeration; follower reach is not interchangeable with group reach. Metrics unavailable for the account or group are displayed as unavailable, and an unlimited quota is displayed explicitly.
 
-## Record, convert, and play macros
+## Record, generate, convert, and play macros
 
 Double-click **`macro_tool.bat`** to open the macro tool. It installs/reuses the launcher environment and opens a numbered menu; it does not start the bot or ngrok. Stop the bot and close its launcher before recording or playing, because both tools share its desktop instance lock.
 
@@ -162,13 +169,15 @@ To record:
 3. Perform the mouse clicks, type text, paste text, and use your keyboard shortcuts.
 4. Press **F8** again to stop and export to `scripts/macros/DH09D.json`. **F9** cancels without saving. F8/F9 are reserved and are not recorded.
 
-The recorder merges ordinary typing into text steps; playback pastes those strings with Ctrl+V. A recorded Ctrl+V or Shift+Insert saves the clipboard text at that moment, rather than depending on future clipboard contents. Pauses between actions and after the last action are retained. The recording stores the actual primary display size as informational metadata. Playback uses the recorded coordinates unchanged without comparing that size to the current display.
+The recorder merges ordinary typing into text steps; playback pastes those strings with Ctrl+V. A recorded Ctrl+V or Shift+Insert saves the clipboard text at that moment, rather than depending on future clipboard contents. Every exported action uses `RECORDED_STEP_DELAY_SECONDS` (default 0.2) instead of reproducing the operator's timing gaps. The recording stores the actual primary display size as informational metadata. Playback uses the recorded coordinates unchanged without comparing that size to the current display.
 
-Record short sequences: `MAX_MACRO_SECONDS` defaults to 35 seconds and also bounds exported playback. Typing is accelerated, but click/keypress overhead still counts toward validation. Unsupported drags, scrolling, modifier-clicks, or clicks outside the primary monitor stop recording with an explanation; they are never silently converted into different actions. The tool listens only while its explicit recording session is open. Passwords typed or pasted during that session are stored in the private JSON, so keep these files out of Git and back them up securely.
+Record short sequences: `MAX_MACRO_SECONDS` defaults to 10 seconds and also bounds exported playback. Typing is accelerated, but click/keypress overhead still counts toward validation. Unsupported drags, scrolling, modifier-clicks, or clicks outside the primary monitor stop recording with an explanation; they are never silently converted into different actions. The tool listens only while its explicit recording session is open. Passwords typed or pasted during that session are stored in the private JSON, so keep these files out of Git and back them up securely.
 
-To play, choose **2 — Play**, enter the filename, and switch to the correct BMS starting screen during the five-second countdown. Playback uses the same validated macro interpreter as the bot. Moving the mouse to a screen corner triggers PyAutoGUI's fail-safe. Standalone playback replays the sequence as recorded; it does not run the bot's login guard or send LINE messages.
+To play, choose **2 — Play**, enter the filename, and switch to the correct BMS starting screen during the three-second countdown. Playback uses the same validated macro interpreter as the bot. Moving the mouse to a screen corner triggers PyAutoGUI's fail-safe. Standalone playback replays the sequence as recorded; it does not run the bot's login guard or send LINE messages.
 
 To convert your old DH09D macro on your PC, copy its **complete JSON** from the chat, choose **3 — Convert old JSON**, enter `DH09D.json`, and leave the source-path prompt blank to read the copied JSON. Alternatively select a local JSON file. Conversion preserves coordinates, text, the navigation URL, and every `post_delay`; `default_post_delay` supplies missing delays. The output uses `click`, `text`, `press`, and `delay` and records the configured desktop dimensions. Existing files are preserved by default; choose another filename or explicitly use `--overwrite` from the command line.
+
+To create another macro with the standard generator login sequence, set `BMS_USERNAME` and `BMS_PASSWORD` once in your private `.env`, then choose **4 — Create from fixed template**. Enter the new macro name such as `DH08C` and paste the complete BMS generator URL. The tool uses the built-in eight-step template and does not read `LOGIN_MACRO_SCRIPT`. The fixed coordinates, delays, and 3000×2000 desktop metadata stay unchanged; your private credentials are inserted from `.env`, and any existing destination file is preserved.
 
 The supplied DH09D script contains a complete login followed by navigation. Start standalone playback on the login page. To use it for session-timeout recovery, set `LOGIN_MACRO_SCRIPT=DH09D.json` in `.env` or send `set-login DH09D.json`, then use untargeted `capture`. Its URL was preserved exactly and contains `DH09-C`, despite the DH09D filename. Recorded/login scripts with credentials are ignored by Git and are not included in the GitHub ZIP; create/import them locally using the tool.
 
@@ -180,13 +189,15 @@ For direct Python execution after installing requirements:
 .\.venv-launcher\Scripts\python.exe macro_tool.py convert DH09D.json --source "C:\path\old_DH09D.json"
 # Read complete JSON copied to the clipboard:
 .\.venv-launcher\Scripts\python.exe macro_tool.py convert DH09D.json
+# Use the fixed template and replace its name and navigation URL:
+.\.venv-launcher\Scripts\python.exe macro_tool.py template DH08C "https://10.121.48.14/complete-generator-url"
 ```
 
 Live recording uses the Windows-only `pynput` dependency; the recorder/converter tests run without desktop hooks on Linux. Actual Windows hooks, keyboard layout, and BMS input behavior require a local check.
 
 ## Macro contract
 
-A JSON array of steps or an object containing `steps` is accepted. The following shows the supported primitives; replace the coordinates and text with your recorded BMS inputs before use:
+A JSON array of steps or an object containing `steps` is accepted. The following shows the supported primitives, including both image-wait conditions; replace the coordinates, text, and reference images with your BMS values before use:
 
 ```json
 {
@@ -194,17 +205,37 @@ A JSON array of steps or an object containing `steps` is accepted. The following
     {"action": "click", "x": 120, "y": 250, "clicks": 1, "button": "left", "delay": 0.2},
     {"action": "text", "text": "operator", "delay": 0.2},
     {"action": "hotkey", "keys": ["ctrl", "a"]},
-    {"action": "press", "key": "enter"},
-    {"action": "sleep", "seconds": 2.0}
+    {"action": "press", "key": "enter", "delay": 0.7},
+    {
+      "action": "wait_image",
+      "image": "assets/login_anchor.png",
+      "condition": "disappear",
+      "timeout": 60,
+      "poll_interval": 0.5,
+      "confidence": 0.9,
+      "consecutive_matches": 2
+    },
+    {"action": "sleep", "seconds": 2.0},
+    {
+      "action": "wait_image",
+      "image": "assets/dashboard_ready.png",
+      "condition": "appear",
+      "timeout": 60,
+      "poll_interval": 0.5,
+      "confidence": 0.9,
+      "consecutive_matches": 2
+    }
   ]
 }
 ```
 
-The entire script is validated before any input. Optional `desktop` metadata has positive integer `width` and `height` fields for reference only. Click coordinates are passed directly to PyAutoGUI; macro files must remain under `scripts/macros` even when symlinked. Text uses `pyperclip` and Ctrl+V and restores the previous clipboard contents. PyAutoGUI's corner fail-safe stays enabled. Each macro has a `MAX_MACRO_SECONDS` execution bound; no executable commands or Python expressions are supported. `scripts/macros/example.json` is an executable delay-only schema example, not a BMS login macro.
+The entire script is validated before any input. A `wait_image` path is relative to the main project folder, regardless of the current working directory or the macro's location; absolute paths, traversal, missing files, and corrupt images are rejected. An external project asset takes priority over a packaged bundle copy. `condition` is required and must be `appear` or `disappear`. Defaults are `timeout: 60`, `poll_interval: 0.5`, `confidence: 0.9`, and `consecutive_matches: 2`. Opposite results reset the confirmation count, and a detection error never counts as disappearance. A timeout or cancellation stops the macro and prevents the remaining steps and screenshot from running. Macros without `wait_image` perform no image-based pause after playback.
+
+Optional `desktop` metadata has positive integer `width` and `height` fields for reference only. Click coordinates are passed directly to PyAutoGUI; macro files must remain under `scripts/macros` even when symlinked. Text uses `pyperclip` and Ctrl+V and restores the previous clipboard contents. PyAutoGUI's corner fail-safe stays enabled. `MAX_MACRO_SECONDS` bounds input and fixed delays; time spent inside a validated `wait_image` uses that step's timeout instead. No executable commands or Python expressions are supported. `scripts/macros/example.json` is an executable delay-only schema example, not a BMS login macro.
 
 ## Images and tunnel updates
 
-Each capture saves a quality-100 full-resolution archival JPEG (JPEG is not mathematically lossless), a full-resolution delivery WebP, and a WebP thumbnail up to 240 pixels. Both image URLs sent to LINE use WebP, as requested for the operator-tested setup. The delivery image retains every pixel dimension of the captured monitor (for example, 3000 × 2000); only the thumbnail is resized. `LINE_WEBP_QUALITY=90` controls WebP encoding quality on a 1–100 scale; increase it for more detail or decrease it for smaller downloads. This setting does not change the report JPEG. No reduced-quality delivery JPEG is generated. Filenames contain the capture time with milliseconds and a 128-bit random token. Partitions use the requested target or current default macro name.
+Each capture saves a quality-100 full-resolution archival JPEG (JPEG is not mathematically lossless), a full-resolution delivery WebP, and a WebP thumbnail up to 240 pixels. Both image URLs sent to LINE use WebP, as requested for the operator-tested setup. The delivery image retains every pixel dimension of the captured monitor (for example, 3000 × 2000); only the thumbnail is resized. `LINE_WEBP_QUALITY=80` controls WebP encoding quality on a 1–100 scale; increase it for more detail or decrease it for smaller downloads. This setting does not change the report JPEG. No reduced-quality delivery JPEG is generated. Filenames contain the capture time with milliseconds and a 128-bit random token. Partitions use the requested target or current default macro name.
 
 LINE's [documented image message formats](https://developers.line.biz/en/reference/messaging-api/#image-message) are JPEG/PNG. WebP delivery follows the operator's tested behavior and is not guaranteed by LINE's published contract. The server returns real `image/webp` content, and the bot does not silently substitute a JPEG if LINE rejects a WebP request. Local tests verify WebP generation, resolution, URLs, MIME types, and routing; a live `capture` on your LINE account verifies acceptance.
 
@@ -234,8 +265,8 @@ python3 -m venv .venv
 .venv/bin/python -m unittest discover -s tests -v
 ```
 
-Tests substitute hardware and LINE HTTP transport while exercising real Flask routing, signature checks, a single pre-capture anchor check, synchronization, scheduling, image encoding, file serving, configuration persistence, and restart deduplication. Desktop libraries are loaded lazily, allowing service tests on a headless machine. Linux desktop operation additionally needs an active X display and a working clipboard provider; Windows is the deployment target.
+Tests substitute hardware and LINE HTTP transport while exercising real Flask routing, signature checks, the one-time login pre-check, JSON-controlled image waiting, cancellation, synchronization, scheduling, image encoding, file serving, configuration persistence, and restart deduplication. Desktop libraries are loaded lazily, allowing service tests on a headless machine. Linux desktop operation additionally needs an active X display and a working clipboard provider; Windows is the deployment target.
 
 Control-panel tests also exercise actual Tk widgets, masked fields, saves/restarts, target editing, small-window layouts, stale-edit rejection, and owned subprocess shutdown. They run with an active desktop display and skip on a headless host. To include them in Linux CI, install Tk and Xvfb, then run `xvfb-run -a .venv/bin/python -m unittest discover -s tests -v`. GUI test cleanup collects destroyed windows on the Tk owner thread before starting later workers.
 
-Before unattended deployment, validate a real capture with and without the login anchor, each target macro, logout macro execution after LINE acceptance, simultaneous commands, stop/restart scheduling, ngrok image retrieval by LINE, and actual quota changes for scheduled pushes. No live LINE token or BMS desktop is available in the cloud checkout, so those deployment checks are not represented as completed.
+Before unattended deployment, validate a real capture with and without the login anchor, every `wait_image` reference under real BMS loading conditions, each target macro, logout macro execution after LINE acceptance, cancellation during a wait, stop/restart scheduling, ngrok image retrieval by LINE, and actual quota changes for scheduled pushes. No live LINE token or BMS desktop is available in the cloud checkout, so those deployment checks are not represented as completed.

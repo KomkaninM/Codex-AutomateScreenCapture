@@ -25,7 +25,7 @@ from panel_pages import (
     TargetsPage,
 )
 from panel_process import ProcessController
-from panel_settings import ProjectStore, fingerprint
+from panel_settings import ProjectStore, fingerprint, settings_change_message
 
 PAGE_DESCRIPTIONS = {
     "Dashboard": "Start your bot, check its connection, and see what it is doing.",
@@ -373,11 +373,6 @@ class ControlPanel:
             toolbar, text="Check LINE quota", command=self.check_quota
         )
         self.quota_button.pack(side="left", padx=8)
-        ttk.Button(
-            toolbar,
-            text="Open macros folder",
-            command=lambda: self.open_folder("scripts/macros"),
-        ).pack(side="left")
         ttk.Label(toolbar, text="Live log", style="Muted.TLabel").pack(side="right")
         log_frame = ttk.Frame(page.body, style="Page.TFrame")
         log_frame.pack(fill="both", expand=True)
@@ -470,9 +465,53 @@ class ControlPanel:
 
         threading.Thread(target=run, name="bms-panel-action", daemon=True).start()
 
+    def _save_settings_and_notify(self, values, version, previous):
+        saved = self.store.save_settings(values, version)
+        message = settings_change_message(previous, values)
+        if not message:
+            return saved, ""
+        cfg = Settings.load(self.project, environ={})
+        if not cfg.channel_access_token or not cfg.delivery_id:
+            return (
+                saved,
+                "Settings saved; LINE notification was skipped because delivery is not configured.",
+            )
+        try:
+            line = LineAPI(cfg.channel_access_token)
+            line.push(cfg.delivery_id, [line.text(message)])
+        except Exception:
+            return (
+                saved,
+                "Settings saved, but LINE could not receive the change notification.",
+            )
+        return saved, ""
+
+    def _settings_saved(self, result, *, restart):
+        _, warning = result
+        self.settings.reload()
+        self.refresh_setup()
+        self.macros.refresh()
+        if warning:
+            self.set_notice(warning)
+        elif restart:
+            self.set_notice("Settings saved and reported to LINE. Restarting the bot…")
+        else:
+            self.set_notice(
+                "Settings saved and applied to .env. A private backup was kept."
+            )
+        if restart:
+            self.start_bot()
+
     def save_settings(self, restart=False):
         values = self.settings.values()
         version = self.settings.version
+        previous = dict(self.settings.saved)
+        if values == previous:
+            self.set_notice("No settings changed.")
+            return
+        restart = restart or (
+            self.controller.state == "online" and self.controller.mode == "bot"
+        )
         if restart:
             if self.targets.dirty:
                 self.set_notice(
@@ -495,10 +534,10 @@ class ControlPanel:
                     ValueError("Settings changed. Reload from file before saving."),
                 )
                 return
-            self.pending_restart = (values, version)
+            self.pending_restart = (values, version, previous)
             self.controller.stop()
             self.set_notice(
-                "Stopping safely, then saving your settings and restarting…"
+                "Applying settings: stopping safely, saving .env, then restarting…"
             )
             self._refresh_controls()
             return
@@ -507,14 +546,11 @@ class ControlPanel:
             return
 
         def saved(result):
-            self.settings.reload()
-            self.refresh_setup()
-            self.macros.refresh()
-            self.set_notice(
-                "Settings saved. They will apply on the next start. A private backup was kept."
-            )
+            self._settings_saved(result, restart=False)
 
-        self.background(lambda: self.store.save_settings(values, version), saved)
+        self.background(
+            lambda: self._save_settings_and_notify(values, version, previous), saved
+        )
 
     def save_targets(self):
         if self.controller.busy:
@@ -714,15 +750,16 @@ class ControlPanel:
                 if self.minimize_on_start.get():
                     self.root.iconify()
         if self.pending_restart and not self.controller.busy and not self.working:
-            values, version = self.pending_restart
+            values, version, previous = self.pending_restart
             self.pending_restart = None
 
             def saved(result):
-                self.settings.reload()
-                self.refresh_setup()
-                self.start_bot()
+                self._settings_saved(result, restart=True)
 
-            self.background(lambda: self.store.save_settings(values, version), saved)
+            self.background(
+                lambda: self._save_settings_and_notify(values, version, previous),
+                saved,
+            )
         if (
             self.closing
             and self.controller.busy

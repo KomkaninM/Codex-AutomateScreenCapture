@@ -21,6 +21,7 @@ class StartupTests(unittest.TestCase):
                 self.assertEqual(destination, recipient)
                 self.assertEqual(messages[0]["type"], "text")
                 self.assertIn("online", messages[0]["text"])
+                self.assertIn("Default macro: login_bms.json", messages[0]["text"])
                 line.reply.assert_not_called()
 
     def test_no_destination_does_not_send_a_notification(self):
@@ -37,16 +38,23 @@ class StartupTests(unittest.TestCase):
         self.assertIn("online notification", "\n".join(logs.output))
         line.push.assert_called_once()
 
-    def test_startup_dispatches_notification_after_binding_without_waiting_for_line(
-        self,
-    ):
+    def test_startup_publishes_online_after_notification_attempt(self):
         cfg = Settings(
             group_id="group", channel_secret="secret", channel_access_token="token"
         )
-        bot = Mock(runtime=RuntimeConfig(cfg), line=Mock(text=LineAPI.text))
+        events = []
+        line = Mock(
+            text=LineAPI.text,
+            push=Mock(side_effect=lambda *args: events.append("notification")),
+        )
+        bot = Mock(runtime=RuntimeConfig(cfg), line=line)
         queued = []
         worker = Mock(submit=lambda fn: queued.append(fn))
         http = Mock(run=Mock(side_effect=KeyboardInterrupt))
+        control = Mock()
+        control.stop_requested.return_value = False
+        control.watch.return_value = nullcontext()
+        control.publish.side_effect = lambda stage, **details: events.append(stage)
 
         def bind(*args, **kwargs):
             self.assertEqual(queued, [])
@@ -68,13 +76,22 @@ class StartupTests(unittest.TestCase):
             "server.log.info"
         ), patch(
             "waitress.create_server", side_effect=bind
+        ), patch(
+            "runtime_control.environment_control", return_value=control
         ):
             main()
         http.run.assert_called_once()
         self.assertEqual(len(queued), 1)
         bot.line.push.assert_not_called()
+        control.publish.assert_not_called()
         queued[0]()
         bot.line.push.assert_called_once()
+        control.publish.assert_called_once_with(
+            "online",
+            port=cfg.port,
+            webhook=cfg.public_tunnel_url + "/callback",
+        )
+        self.assertEqual(events, ["notification", "online"])
         http.close.assert_called_once()
 
 

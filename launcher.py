@@ -462,12 +462,6 @@ def _run_application(project, *, control=None):
         return 0
     if control:
         control.publish("preparing")
-    say("Running application tests...")
-    subprocess.run(
-        [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-v"],
-        cwd=project,
-        check=True,
-    )
     cfg = prepare_configuration(project, interactive=control is None)
     from line_api import LineAPI
 
@@ -509,7 +503,6 @@ def _run_application(project, *, control=None):
                 server.wait(
                     timeout=45
                     + 2 * cfg.max_macro_seconds
-                    + cfg.login_wait_seconds
                     + 4 * cfg.settle_delay
                     + LineAPI.MAX_IMAGE_REQUEST_SECONDS
                     + 10

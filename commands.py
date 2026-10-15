@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import logging
+import re
 import shlex
+import threading
 import time
 import traceback
 from dataclasses import dataclass
@@ -17,11 +19,16 @@ from scheduler import parse_interval, ScheduleCancelled
 
 log = logging.getLogger(__name__)
 HELP = (
-    "Commands: capture [target] [note] [--starttime HH:MM[:SS]], "
-    "start-capture 30m [note] [--starttime HH:MM[:SS]], stop-capture, "
+    "Commands: capture [target] [note] [-s HH:MM[:SS]], "
+    "start-capture 30m [note] [-s HH:MM[:SS]] [-m count], "
     "set-login macro.json, login, macro name.json, "
-    "enable-autologout, disable-autologout, check-id, check-quota"
+    "enable-autologout, disable-autologout, check-id, check-quota, stop-capture. "
+    "Long options --starttime and --max are also supported."
 )
+
+
+class CommandInputError(ValueError):
+    pass
 
 
 @dataclass(frozen=True)
@@ -32,12 +39,23 @@ class Command:
     starttime: str | None = None
     interval: float | None = None
     macro: str | None = None
+    max_captures: int | None = None
 
 
 @dataclass
 class ScheduleProgress:
     # Updated inside the serialized capture delivery callback, after LINE acceptance.
     delivered: int = 0
+    successful_captures: int = 0
+    max_captures: int | None = None
+    completion_attempted: bool = False
+
+    @property
+    def limit_reached(self):
+        return (
+            self.max_captures is not None
+            and self.successful_captures >= self.max_captures
+        )
 
 
 def parse_command(text, targets):
@@ -63,25 +81,55 @@ def parse_command(text, targets):
     }:
         return Command("unknown")
     if name in ("capture", "start-capture"):
-        parts = [
-            "--starttime" if part in ("—starttime", "–starttime") else part
-            for part in parts
-        ]
+        aliases = {
+            "-s": "starttime",
+            "--starttime": "starttime",
+            "—starttime": "starttime",
+            "–starttime": "starttime",
+            "-m": "max",
+            "--max": "max",
+        }
         start = None
-        if "--starttime" in parts:
-            i = parts.index("--starttime")
-            if i + 1 >= len(parts) or parts.count("--starttime") != 1:
-                raise ValueError("--starttime needs exactly one HH:MM[:SS] value.")
-            start = parts[i + 1]
-            try:
-                datetime.strptime(
-                    start, "%H:%M:%S" if start.count(":") == 2 else "%H:%M"
-                )
-            except ValueError:
-                raise ValueError("Invalid --starttime; use HH:MM[:SS].") from None
-            parts[i : i + 2] = []
-        if any(p.startswith("--") for p in parts):
-            raise ValueError("Unknown command option.")
+        max_captures = None
+        positionals = []
+        seen = set()
+        i = 0
+        while i < len(parts):
+            option = aliases.get(parts[i])
+            if option is None:
+                if parts[i].startswith("--"):
+                    raise CommandInputError(f"Unknown command option: {parts[i]}")
+                positionals.append(parts[i])
+                i += 1
+                continue
+            if option in seen:
+                label = "Start time" if option == "starttime" else "Maximum"
+                raise CommandInputError(f"{label} may be specified only once.")
+            seen.add(option)
+            if i + 1 >= len(parts) or parts[i + 1] in aliases:
+                label = "Start time" if option == "starttime" else "Maximum"
+                raise CommandInputError(f"{label} option requires a value.")
+            value = parts[i + 1]
+            if option == "starttime":
+                try:
+                    parsed = datetime.strptime(
+                        value, "%H:%M:%S" if value.count(":") == 2 else "%H:%M"
+                    )
+                except ValueError:
+                    raise CommandInputError(
+                        "Invalid start time; use HH:MM or HH:MM:SS."
+                    ) from None
+                start = parsed.strftime("%H:%M:%S")
+            elif not re.fullmatch(r"[1-9]\d*", value):
+                raise CommandInputError("Maximum captures must be a positive integer.")
+            else:
+                max_captures = int(value)
+            i += 2
+        parts = positionals
+        if name != "start-capture" and max_captures is not None:
+            raise CommandInputError(
+                "Maximum captures is supported only by start-capture."
+            )
         interval = None
         if name == "start-capture":
             if not parts:
@@ -92,7 +140,14 @@ def parse_command(text, targets):
             ids = {k.upper(): k for k in targets}
             if parts[0].upper() in ids:
                 target = ids[parts.pop(0).upper()]
-        return Command(name, target, " ".join(parts), start, interval)
+        return Command(
+            name,
+            target,
+            " ".join(parts),
+            start,
+            interval,
+            max_captures=max_captures,
+        )
     if name in ("set-login", "macro"):
         if len(parts) != 1:
             raise ValueError(f"{name} requires exactly one macro filename.")
@@ -113,6 +168,17 @@ def next_start(starttime, now):
     return due if due > now else due + timedelta(days=1)
 
 
+def readable_interval(seconds):
+    for unit_seconds, singular, plural in (
+        (3600, "hour", "hours"),
+        (60, "minute", "minutes"),
+    ):
+        if seconds >= unit_seconds and seconds % unit_seconds == 0:
+            value = seconds / unit_seconds
+            return f"{value:g} {singular if value == 1 else plural}"
+    return f"{seconds:g} {'second' if seconds == 1 else 'seconds'}"
+
+
 class Bot:
     def __init__(self, runtime, workflow, line, scheduler):
         self.runtime = runtime
@@ -120,7 +186,15 @@ class Bot:
         self.line = line
         self.scheduler = scheduler
 
-    def _image_messages(self, shot, note="", *, capture_number=None):
+    def _target_macro(self, target, cfg=None):
+        cfg = cfg or self.runtime.snapshot()
+        return (
+            self.workflow.targets[target]["macro"]
+            if target
+            else cfg.default_login_macro
+        )
+
+    def _image_messages(self, shot, note="", *, capture_number=None, target=None):
         cfg = self.runtime.snapshot()
         urls = shot.urls(cfg.public_tunnel_url)
         captured_at = shot.captured_at.astimezone(ZoneInfo(cfg.timezone))
@@ -132,11 +206,112 @@ class Bot:
         caption = (
             f"{heading}\nTimestamp: {captured_at:%Y-%m-%d %H:%M:%S} ({cfg.timezone})"
         )
+        if target:
+            caption += f"\nTarget: {target}\nMacro: {self._target_macro(target, cfg)}"
         if note:
             caption += f"\nNote: {note}"
         return [self.line.text(caption), self.line.image(*urls)]
 
-    def _scheduled(self, target, note, cancel, progress=None):
+    def _schedule_message(self, job_id, due, command, cfg):
+        lines = [
+            "Schedule started",
+            f"Code: {job_id}",
+            f"Starts: {due:%Y-%m-%d %H:%M:%S} ({cfg.timezone})",
+            (
+                f"Interval: {readable_interval(command.interval)}"
+                if command.interval is not None
+                else "Interval: Once"
+            ),
+            f"Target: {command.target or 'Default'}",
+            f"Macro: {self._target_macro(command.target, cfg)}",
+        ]
+        if command.max_captures is not None:
+            lines.append(f"Maximum captures: {command.max_captures}")
+        if command.note:
+            lines.append(f"Note: {command.note}")
+        return "\n".join(lines)
+
+    def _completion_message(self, note, progress):
+        return "\n".join(
+            [
+                "✅ Capture Schedule Completed",
+                "",
+                f"Note: {note or 'None'}",
+                (
+                    f"Pictures Sent: {progress.successful_captures}/"
+                    f"{progress.max_captures}"
+                ),
+                "Status: Completed",
+            ]
+        )
+
+    @staticmethod
+    def _timeout_error_text(error):
+        match = re.search(
+            r"wait_image timed out waiting for ([^;\r\n]+?) "
+            r"to (appear|disappear);",
+            str(error),
+        )
+        if match:
+            image, condition = match.groups()
+            return f"Timed out waiting for {image} to {condition}."
+        return str(error)
+
+    def _capture_timeout_message(
+        self,
+        error,
+        *,
+        target=None,
+        note="",
+        scheduled=False,
+        job_id=None,
+        recurring=True,
+    ):
+        cfg = self.runtime.snapshot()
+        captured_at = datetime.now(ZoneInfo(cfg.timezone))
+        lines = [
+            "⚠️ Scheduled Capture Timed Out" if scheduled else "⚠️ Capture Timed Out",
+            "",
+        ]
+        if scheduled:
+            lines.append(f"Schedule Code: {job_id or 'Unavailable'}")
+        lines.extend(
+            [
+                f"Timestamp: {captured_at:%Y-%m-%d %H:%M:%S} ({cfg.timezone})",
+                f"Target: {target or 'Default'}",
+                f"Macro: {self._target_macro(target, cfg)}",
+            ]
+        )
+        if note:
+            lines.append(f"Note: {note}")
+        lines.append(f"Error: {self._timeout_error_text(error)}")
+        if scheduled and recurring:
+            lines.append("Status: Will retry at the next scheduled interval.")
+        elif scheduled:
+            lines.append("Status: Schedule ended without a picture.")
+        else:
+            lines.append("Status: No picture was captured or sent.")
+        return "\n".join(lines)
+
+    def _complete_schedule(self, job_id, note, progress, cfg):
+        if (
+            job_id is None
+            or not progress.limit_reached
+            or progress.completion_attempted
+        ):
+            return False
+        if not self.scheduler.cancel(job_id):
+            return False
+        progress.completion_attempted = True
+        self.line.push(
+            cfg.delivery_id,
+            [self.line.text(self._completion_message(note, progress))],
+        )
+        return True
+
+    def _scheduled(
+        self, target, note, cancel, progress=None, job_id=None, recurring=True
+    ):
         progress = progress if progress is not None else ScheduleProgress()
         cfg = self.runtime.snapshot()
         if not cfg.public_tunnel_url or not cfg.delivery_id:
@@ -148,12 +323,46 @@ class Bot:
             log.info("Sending scheduled image to LINE; waiting for acceptance.")
             self.line.push(
                 cfg.delivery_id,
-                self._image_messages(shot, note, capture_number=progress.delivered + 1),
+                self._image_messages(
+                    shot,
+                    note,
+                    capture_number=progress.delivered + 1,
+                    target=target,
+                ),
             )
             progress.delivered += 1
+            progress.successful_captures += 1
             log.info("LINE accepted the scheduled image message.")
 
-        self.workflow.capture(target, cancel=cancel, deliver=deliver)
+        delivered_before = progress.successful_captures
+        try:
+            self.workflow.capture(target, cancel=cancel, deliver=deliver)
+        except AutomationTimeoutError as exc:
+            try:
+                self.line.push(
+                    cfg.delivery_id,
+                    [
+                        self.line.text(
+                            self._capture_timeout_message(
+                                exc,
+                                target=target,
+                                note=note,
+                                scheduled=True,
+                                job_id=job_id,
+                                recurring=recurring,
+                            )
+                        )
+                    ],
+                )
+            except Exception as notification_error:
+                log.error(
+                    "Scheduled timeout notification failed; original timeout preserved: %s",
+                    type(notification_error).__name__,
+                )
+            raise
+        finally:
+            if progress.successful_captures > delivered_before:
+                self._complete_schedule(job_id, note, progress, cfg)
 
     def cancel_schedules(self):
         return self.scheduler.stop_all()
@@ -180,6 +389,7 @@ class Bot:
         cfg = self.runtime.snapshot()
         messages = None
         reply_attempted = False
+        command = None
         try:
             command = parse_command(event["message"]["text"], self.workflow.targets)
             if command.name == "unknown":
@@ -231,28 +441,82 @@ class Bot:
                         if command.starttime
                         else now + timedelta(seconds=command.interval)
                     )
-                    progress = ScheduleProgress()
+                    progress = ScheduleProgress(max_captures=command.max_captures)
+                    schedule_cancel = threading.Event()
+                    immediate_initial = (
+                        command.name == "start-capture" and not command.starttime
+                    )
                     job_id = self.scheduler.add(
                         command.interval,
                         due,
                         lambda cancel: self._scheduled(
-                            command.target, command.note, cancel, progress
+                            command.target,
+                            command.note,
+                            cancel,
+                            progress,
+                            job_id,
+                            command.interval is not None,
                         ),
                         lambda cancel: self.workflow.prepare(
                             command.target, cancel=cancel
                         ),
                         expected_generation=schedule_generation,
+                        cancel=schedule_cancel,
+                        paused=immediate_initial,
                     )
-                    messages = [
-                        self.line.text(
-                            f"Scheduled {job_id} at {due.isoformat()}. Delivery uses push quota; group membership scales consumption."
-                        )
-                    ]
+                    schedule_message = self.line.text(
+                        self._schedule_message(job_id, due, command, cfg)
+                    )
+                    if immediate_initial:
+                        initial_delivered = False
+
+                        def deliver_initial(shot):
+                            nonlocal initial_delivered, reply_attempted
+                            initial_messages = [
+                                schedule_message,
+                                *self._image_messages(
+                                    shot,
+                                    command.note,
+                                    capture_number=0,
+                                    target=command.target,
+                                ),
+                            ]
+                            self.workflow.check(deadline=deadline)
+                            reply_attempted = True
+                            log.info(
+                                "Sending initial scheduled image to LINE; waiting for acceptance."
+                            )
+                            self.line.reply(token, initial_messages)
+                            initial_delivered = True
+                            progress.successful_captures += 1
+                            log.info("LINE accepted scheduled capture #0.")
+
+                        try:
+                            self.workflow.capture(
+                                command.target,
+                                deadline=deadline,
+                                cancel=schedule_cancel,
+                                deliver=deliver_initial,
+                            )
+                        except BaseException:
+                            if not initial_delivered:
+                                self.scheduler.cancel(job_id)
+                            raise
+                        finally:
+                            completed = self._complete_schedule(
+                                job_id, command.note, progress, cfg
+                            )
+                            if initial_delivered and not completed:
+                                self.scheduler.resume(job_id)
+                    else:
+                        messages = [schedule_message]
                 else:
 
                     def deliver(shot):
                         nonlocal reply_attempted
-                        image_messages = self._image_messages(shot, command.note)
+                        image_messages = self._image_messages(
+                            shot, command.note, target=command.target
+                        )
                         self.workflow.check(deadline=deadline)
                         reply_attempted = True
                         log.info(
@@ -268,6 +532,9 @@ class Bot:
             messages = [
                 self.line.text("Schedule request canceled by a later stop-capture.")
             ]
+        except CommandInputError as exc:
+            log.warning("Invalid command input: %s", type(exc).__name__)
+            messages = [self.line.text(str(exc))]
         except (ValueError, FileNotFoundError) as exc:
             # Do not disclose absolute paths or filesystem details to the chat.
             log.warning("Command configuration/input failure: %s", type(exc).__name__)
@@ -278,7 +545,20 @@ class Bot:
             ]
         except (AutomationError, AutomationTimeoutError) as exc:
             log.error("Command workflow failed: %s: %s", type(exc).__name__, exc)
-            messages = [self.line.text(f"Automation failed: {exc}")]
+            if isinstance(exc, AutomationTimeoutError) and command is not None and (
+                command.name in ("capture", "start-capture")
+            ):
+                messages = [
+                    self.line.text(
+                        self._capture_timeout_message(
+                            exc,
+                            target=command.target,
+                            note=command.note,
+                        )
+                    )
+                ]
+            else:
+                messages = [self.line.text(f"Automation failed: {exc}")]
         except Exception as exc:
             # Frame locations help debugging without printing exception contents,
             # source lines, or locals that may contain credentials or macro text.

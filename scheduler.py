@@ -38,6 +38,7 @@ class Job:
     prepared: bool = False
     precheck_future: object = None
     in_flight: bool = False
+    paused: bool = False
 
 
 class Scheduler:
@@ -55,7 +56,17 @@ class Scheduler:
         with self.lock:
             return self.generation
 
-    def add(self, interval, due, capture, precheck, *, expected_generation=None):
+    def add(
+        self,
+        interval,
+        due,
+        capture,
+        precheck,
+        *,
+        expected_generation=None,
+        cancel=None,
+        paused=False,
+    ):
         if due.tzinfo is None:
             raise ValueError("Schedule timestamps must be timezone-aware.")
         if interval is not None and (not math.isfinite(interval) or interval < 10):
@@ -68,7 +79,15 @@ class Scheduler:
                 raise ScheduleCancelled("Schedule request superseded by stop-capture.")
             if len(self.jobs) >= self.max_jobs:
                 raise ValueError("Maximum active schedules reached.")
-            job = Job(uuid.uuid4().hex[:12], interval, due, capture, precheck)
+            job = Job(
+                uuid.uuid4().hex[:12],
+                interval,
+                due,
+                capture,
+                precheck,
+                cancel=cancel if cancel is not None else threading.Event(),
+                paused=paused,
+            )
             self.jobs[job.id] = job
             return job.id
 
@@ -81,11 +100,27 @@ class Scheduler:
             self.jobs.clear()
             return count
 
+    def cancel(self, job_id):
+        with self.lock:
+            job = self.jobs.pop(job_id, None)
+            if job is None:
+                return False
+            job.cancel.set()
+            return True
+
+    def resume(self, job_id):
+        with self.lock:
+            job = self.jobs.get(job_id)
+            if job is None or job.cancel.is_set():
+                return False
+            job.paused = False
+            return True
+
     def tick(self, now=None):
         now = now or self.clock()
         with self.lock:
             for job in list(self.jobs.values()):
-                if job.cancel.is_set() or job.in_flight:
+                if job.cancel.is_set() or job.in_flight or job.paused:
                     continue
                 if now >= job.due:
                     # A capture may not overtake its queued/running precheck and logout
