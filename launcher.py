@@ -503,7 +503,6 @@ def _run_application(project, *, control=None):
                 server.wait(
                     timeout=45
                     + 2 * cfg.max_macro_seconds
-                    + cfg.login_wait_seconds
                     + 4 * cfg.settle_delay
                     + LineAPI.MAX_IMAGE_REQUEST_SECONDS
                     + 10

@@ -97,15 +97,10 @@ def build_bot(runtime, dispatcher):
     player = MacroPlayer(
         cfg.macros_dir,
         max_seconds=cfg.max_macro_seconds,
+        project_dir=cfg.project_dir,
     )
     detector = VisualDetector(cfg.logged_out_anchor, confidence=cfg.confidence)
-    guard = SessionGuard(
-        detector,
-        player,
-        settle_delay=cfg.settle_delay,
-        wait_seconds=cfg.login_wait_seconds,
-        poll_interval=cfg.detector_interval,
-    )
+    guard = SessionGuard(detector, player)
     workflow = Workflow(
         runtime,
         player,

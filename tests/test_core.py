@@ -79,26 +79,21 @@ class CoreTests(unittest.TestCase):
         cfg = Settings.load(self.root, environ={})
 
         self.assertEqual(cfg.max_macro_seconds, 10)
-        self.assertEqual(cfg.login_wait_seconds, 10)
-        self.assertEqual(cfg.detector_interval, 0.25)
+        self.assertFalse(hasattr(cfg, "login_wait_seconds"))
+        self.assertFalse(hasattr(cfg, "detector_interval"))
         self.assertEqual(cfg.line_webp_quality, 80)
 
-    def test_login_poll_and_recorded_step_delay_load_and_validate(self):
+    def test_obsolete_login_wait_settings_are_ignored_and_recording_delay_validates(self):
         (self.root / ".env").write_text(
             "DETECTOR_INTERVAL_SEC=0.1\nRECORDED_STEP_DELAY_SECONDS=0.2\n"
         )
         cfg = Settings.load(self.root, environ={})
-        self.assertEqual(cfg.detector_interval, 0.1)
+        self.assertFalse(hasattr(cfg, "detector_interval"))
         self.assertEqual(getattr(cfg, "recorded_step_delay_seconds", None), 0.2)
 
-        for text in (
-            "DETECTOR_INTERVAL_SEC=0\n",
-            "RECORDED_STEP_DELAY_SECONDS=-0.1\n",
-        ):
-            with self.subTest(text=text):
-                (self.root / ".env").write_text(text)
-                with self.assertRaises(ValueError):
-                    Settings.load(self.root, environ={})
+        (self.root / ".env").write_text("RECORDED_STEP_DELAY_SECONDS=-0.1\n")
+        with self.assertRaises(ValueError):
+            Settings.load(self.root, environ={})
 
     def test_runtime_persistence_and_path_confinement(self):
         self.runtime.set_login("DH07A.json")
@@ -241,74 +236,108 @@ class CoreTests(unittest.TestCase):
 
     def test_detector_unknown_blocks_and_target_replaces_default_login(self):
         player = Mock()
-        states = iter([SessionState.LOGGED_OUT, SessionState.LOGGED_IN])
-        guard = SessionGuard(Mock(state=lambda: next(states)), player, settle_delay=0)
+        detector = Mock(
+            state=Mock(side_effect=[SessionState.LOGGED_OUT, SessionState.LOGGED_IN])
+        )
+        guard = SessionGuard(detector, player)
         used = guard.ensure("login.json", "DH07C.json")
         self.assertTrue(used)
         player.play.assert_called_once_with("DH07C.json")
-        guard = SessionGuard(
-            Mock(state=lambda: SessionState.UNKNOWN), player, settle_delay=0
-        )
+        detector.state.assert_called_once_with()
+        guard = SessionGuard(Mock(state=lambda: SessionState.UNKNOWN), player)
         with self.assertRaises(RuntimeError):
             guard.ensure("login.json")
 
-    def test_login_guard_waits_until_login_anchor_disappears(self):
+    def test_login_guard_does_not_rescan_after_the_login_macro(self):
         detector = Mock(
-            state=Mock(
-                side_effect=[
-                    SessionState.LOGGED_OUT,
-                    SessionState.LOGGED_OUT,
-                    SessionState.LOGGED_IN,
-                ]
-            )
+            state=Mock(side_effect=[SessionState.LOGGED_OUT, SessionState.LOGGED_IN])
         )
         player = Mock()
-        sleep = Mock()
-        guard = SessionGuard(
-            detector,
-            player,
-            wait_seconds=30,
-            poll_interval=0.1,
-            sleep=sleep,
-        )
+        guard = SessionGuard(detector, player)
 
         self.assertTrue(guard.ensure("login.json"))
 
         player.play.assert_called_once_with("login.json")
-        sleep.assert_called_once_with(0.1)
-        self.assertEqual(detector.state.call_count, 3)
+        detector.state.assert_called_once_with()
 
-    def test_login_guard_continues_when_anchor_wait_times_out(self):
-        detector = Mock(state=Mock(return_value=SessionState.LOGGED_OUT))
-        player = Mock()
-        guard = SessionGuard(detector, player, wait_seconds=0)
-
-        with self.assertLogs("detector", level="WARNING") as logs:
-            self.assertTrue(guard.ensure("login.json"))
-
-        self.assertEqual(detector.state.call_count, 2)
-        self.assertIn("continuing capture", "\n".join(logs.output))
-
-    def test_login_anchor_wait_preserves_time_for_capture_before_reply_deadline(self):
-        detector = Mock(
-            state=Mock(
-                side_effect=[
-                    SessionState.LOGGED_OUT,
-                    SessionState.LOGGED_OUT,
-                ]
+    def test_macro_wait_image_appears_then_continues_remaining_steps(self):
+        macros = self.root / "scripts" / "macros"
+        assets = self.root / "assets"
+        macros.mkdir(parents=True)
+        assets.mkdir()
+        Image.new("RGB", (4, 4), "red").save(assets / "ready.png")
+        (macros / "a.json").write_text(
+            json.dumps(
+                {
+                    "steps": [
+                        {
+                            "action": "wait_image",
+                            "image": "assets/ready.png",
+                            "condition": "appear",
+                            "timeout": 5,
+                            "poll_interval": 0.1,
+                            "confidence": 0.9,
+                            "consecutive_matches": 2,
+                        },
+                        {"action": "click", "x": 10, "y": 20},
+                    ]
+                }
             )
         )
-        sleep = Mock()
-        guard = SessionGuard(
-            detector, Mock(), settle_delay=2, wait_seconds=30, sleep=sleep
+        gui = Mock()
+        with patch(
+            "detector.image_visible", side_effect=[False, True, True], create=True
+        ) as match:
+            try:
+                MacroPlayer(macros, gui=gui, sleep=lambda _: None).play("a.json")
+            except ValueError as exc:
+                self.fail(f"wait_image should be supported: {exc}")
+
+        self.assertEqual(match.call_count, 3)
+        gui.click.assert_called_once()
+
+    def test_wait_image_uses_its_own_timeout_outside_macro_input_budget(self):
+        macros = self.root / "scripts" / "macros"
+        assets = self.root / "assets"
+        macros.mkdir(parents=True)
+        assets.mkdir()
+        Image.new("RGB", (4, 4), "red").save(assets / "ready.png")
+        (macros / "a.json").write_text(
+            json.dumps(
+                {
+                    "steps": [
+                        {
+                            "action": "wait_image",
+                            "image": "assets/ready.png",
+                            "condition": "appear",
+                            "timeout": 60,
+                            "poll_interval": 0.5,
+                            "consecutive_matches": 2,
+                        },
+                        {"action": "click", "x": 1, "y": 2},
+                    ]
+                }
+            )
         )
+        clock = [0.0]
 
-        with patch("detector.time.monotonic", return_value=100), self.assertLogs(
-            "detector", level="WARNING"
+        def sleep(seconds):
+            clock[0] += seconds
+
+        gui = Mock()
+        visible = [False, False, False, True, True]
+        with patch("macro_player.time.monotonic", side_effect=lambda: clock[0]), patch(
+            "detector.image_visible", side_effect=visible, create=True
         ):
-            self.assertTrue(guard.ensure("login.json", deadline=102))
+            try:
+                MacroPlayer(
+                    macros, gui=gui, sleep=sleep, max_seconds=1
+                ).play("a.json")
+            except ValueError as exc:
+                self.fail(f"wait_image should be supported: {exc}")
 
-        sleep.assert_not_called()
+        self.assertGreater(clock[0], 1)
+        gui.click.assert_called_once()
 
     def test_workflow_serializes_and_leaves_session_open_on_capture_failure(self):
         active = []
@@ -341,6 +370,21 @@ class CoreTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             wf.capture()
         player.play.assert_not_called()
+
+    def test_workflow_keeps_page_settle_delay_after_macro_completion(self):
+        runtime = RuntimeConfig(Settings(project_dir=self.root, settle_delay=2))
+        order = []
+        player = Mock()
+        player._wait.side_effect = lambda *args: order.append("settle")
+        guard = Mock()
+        guard.ensure.side_effect = lambda *args, **kwargs: order.append("macro") or True
+        capture = Mock()
+        capture.capture.side_effect = lambda *args: order.append("capture") or "shot"
+        workflow = Workflow(runtime, player, guard, capture)
+
+        self.assertEqual(workflow.capture(), "shot")
+
+        self.assertEqual(order, ["macro", "settle", "capture"])
 
     def test_command_parser_schedule_and_target_note(self):
         cmd = parse_command(

@@ -16,6 +16,7 @@ from zoneinfo import ZoneInfoNotFoundError
 
 from dotenv import dotenv_values, set_key
 
+from automation_errors import AutomationError
 from config import Settings, boolean, macro_name
 from launcher import ensure_env_file, launcher_lock
 from macro_player import MacroPlayer
@@ -44,8 +45,6 @@ ENV_FIELDS = {
     "IMAGE_TTL_SECONDS": "image_ttl_seconds",
     "CONFIDENCE_THRESHOLD": "confidence",
     "INTERNAL_API_TOKEN": "internal_api_token",
-    "DETECTOR_INTERVAL_SEC": "detector_interval",
-    "LOGIN_WAIT_SECONDS": "login_wait_seconds",
     "RECORDED_STEP_DELAY_SECONDS": "recorded_step_delay_seconds",
     "DESKTOP_WIDTH": "expected_width",
     "DESKTOP_HEIGHT": "expected_height",
@@ -70,8 +69,6 @@ SETTING_NOTIFICATION_FIELDS = (
     ("REPLY_UNKNOWN_COMMANDS", "Reply to unknown commands"),
     ("MACRO_SETTLE_DELAY", "Page loading delay"),
     ("MAX_MACRO_SECONDS", "Maximum macro time"),
-    ("DETECTOR_INTERVAL_SEC", "Login polling interval"),
-    ("LOGIN_WAIT_SECONDS", "Maximum login wait"),
     ("CONFIDENCE_THRESHOLD", "Login anchor threshold"),
     ("RECORDED_STEP_DELAY_SECONDS", "Recorded action delay"),
     ("TIMEZONE", "Timezone"),
@@ -262,7 +259,9 @@ class ProjectStore:
         ):
             try:
                 steps = MacroPlayer(
-                    cfg.macros_dir, max_seconds=cfg.max_macro_seconds
+                    cfg.macros_dir,
+                    max_seconds=cfg.max_macro_seconds,
+                    project_dir=cfg.project_dir,
                 ).load(path.name)
                 result.append(
                     {
@@ -272,7 +271,7 @@ class ProjectStore:
                         "modified": path.stat().st_mtime,
                     }
                 )
-            except (OSError, ValueError):
+            except (OSError, ValueError, AutomationError):
                 result.append(
                     {"name": path.name, "steps": "—", "valid": False, "modified": 0}
                 )
@@ -353,11 +352,13 @@ class ProjectStore:
             [("Logout macro", cfg.logout_macro)] if cfg.auto_logout else []
         ):
             try:
-                MacroPlayer(cfg.macros_dir, max_seconds=cfg.max_macro_seconds).load(
-                    name
-                )
+                MacroPlayer(
+                    cfg.macros_dir,
+                    max_seconds=cfg.max_macro_seconds,
+                    project_dir=cfg.project_dir,
+                ).load(name)
                 add(label, True, name)
-            except (OSError, ValueError):
+            except (OSError, ValueError, AutomationError):
                 add(
                     label,
                     False,

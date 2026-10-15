@@ -150,22 +150,12 @@ FORM_SECTIONS = {
                 (
                     "MAX_MACRO_SECONDS",
                     "Maximum macro time (seconds)",
-                    "Interactive delivery must still start within the LINE reply deadline.",
+                    "Bounds input and fixed delays. wait_image uses its JSON timeout; LINE deadlines still apply.",
                 ),
                 (
                     "CONFIDENCE_THRESHOLD",
                     "Login anchor match threshold",
-                    "0–1; default 0.8. Higher values require a closer visual match.",
-                ),
-                (
-                    "DETECTOR_INTERVAL_SEC",
-                    "Login polling interval (seconds)",
-                    "Checks for the login anchor after a macro. Default 0.25; use 0.1 for faster polling.",
-                ),
-                (
-                    "LOGIN_WAIT_SECONDS",
-                    "Maximum login wait (seconds)",
-                    "Continues immediately when the anchor disappears; timeout uses the capture fallback.",
+                    "0–1; used only for the pre-macro login check. wait_image has its own confidence.",
                 ),
             ],
         ),
@@ -836,7 +826,7 @@ class HelpPage(Scrollable):
         paragraphs = [
             (
                 "Get online in four steps",
-                "1. In Settings → LINE & ngrok, enter the LINE access token, channel secret, and your ngrok details. Browse to ngrok.exe. Click Save & Apply.\n\n2. Click Start Bot on Dashboard. Copy the webhook URL into LINE Developers → Messaging API, then enable Use webhook. For a reserved ngrok domain this setup is done once.\n\n3. Add the bot as a friend or invite it to your LINE group. Send check-id, enter your User ID or Group ID in Settings, then click Save & Apply. Group ID takes priority; leave it blank for private chats.\n\n4. In Macros, record/import your login macro and select a login-page anchor crop. Choose the default login macro in Settings. Keep the BMS visible and the app minimized during capture.",
+                "1. In Settings → LINE & ngrok, enter the LINE access token, channel secret, and your ngrok details. Browse to ngrok.exe. Click Save & Apply.\n\n2. Click Start Bot on Dashboard. Copy the webhook URL into LINE Developers → Messaging API, then enable Use webhook. For a reserved ngrok domain this setup is done once.\n\n3. Add the bot as a friend or invite it to your LINE group. Send check-id, enter your User ID or Group ID in Settings, then click Save & Apply. Group ID takes priority; leave it blank for private chats.\n\n4. In Macros, record/import your login macro and select a login-page anchor crop. Add wait_image steps to JSON wherever loading must pause, then choose the default login macro in Settings. Keep the BMS visible and the app minimized during capture.",
             ),
             (
                 "Useful LINE commands",
@@ -852,7 +842,7 @@ class HelpPage(Scrollable):
             ),
             (
                 "Macro tools",
-                "Stop the bot before recording or playing. F8 starts recording, then F8 stops and exports JSON. F9 cancels. Playback starts after three seconds so you can switch to the BMS; moving the mouse to a corner triggers the fail-safe.\n\nNew recordings use the configured delay for every exported action instead of reproducing the operator's timing gaps. Imports accept current macros and your old click_coord/type_text/press_key scripts. Existing filenames are preserved. The original recorded click coordinates are replayed without display consistency checks.",
+                "Stop the bot before recording or playing. F8 starts recording, then F8 stops and exports JSON. F9 cancels. Playback starts after three seconds so you can switch to the BMS; moving the mouse to a corner triggers the fail-safe.\n\nNew recordings use the configured delay for every exported action instead of reproducing the operator's timing gaps. Imports accept current macros, wait_image, and your old click_coord/type_text/press_key scripts. Existing filenames are preserved. The original recorded click coordinates are replayed without display consistency checks. Image waiting occurs only at explicit wait_image steps; there is no automatic wait after a macro.",
             ),
         ]
         for index, (title, text) in enumerate(paragraphs):

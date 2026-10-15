@@ -206,6 +206,24 @@ class MacroToolTests(unittest.TestCase):
         save_macro(self.root, "DH09D.json", converted)
         self.assertEqual(MacroPlayer(self.root).load("DH09D.json"), converted["steps"])
 
+    def test_conversion_preserves_wait_image_configuration(self):
+        step = {
+            "action": "wait_image",
+            "image": "assets/ready.png",
+            "condition": "appear",
+            "timeout": 60,
+            "poll_interval": 0.5,
+            "confidence": 0.9,
+            "consecutive_matches": 2,
+        }
+
+        try:
+            converted = convert_legacy({"steps": [step]})
+        except ValueError as exc:
+            self.fail(f"wait_image should survive macro conversion: {exc}")
+
+        self.assertEqual(converted["steps"], [{**step, "delay": 0}])
+
     def test_conversion_rejects_unsupported_actions_without_creating_a_script(self):
         with self.assertRaises(ValueError):
             convert_legacy({"steps": [{"action": "shell", "command": "bad"}]})

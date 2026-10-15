@@ -70,12 +70,13 @@ class PanelSettingsTests(unittest.TestCase):
         for key in (
             "BMS_USERNAME",
             "BMS_PASSWORD",
-            "DETECTOR_INTERVAL_SEC",
-            "LOGIN_WAIT_SECONDS",
             "RECORDED_STEP_DELAY_SECONDS",
         ):
             self.assertIn(key, ENV_FIELDS)
             self.assertIn(key, form_fields)
+        for obsolete in ("DETECTOR_INTERVAL_SEC", "LOGIN_WAIT_SECONDS"):
+            self.assertNotIn(obsolete, ENV_FIELDS)
+            self.assertNotIn(obsolete, form_fields)
         self.assertIn("BMS_PASSWORD", SECRET_FIELDS)
 
         values, version = self.store.load_settings()
@@ -84,7 +85,6 @@ class PanelSettingsTests(unittest.TestCase):
             | {
                 "BMS_USERNAME": "operator",
                 "BMS_PASSWORD": "private-password",
-                "DETECTOR_INTERVAL_SEC": "0.1",
                 "RECORDED_STEP_DELAY_SECONDS": "0.2",
             },
             version,
@@ -92,7 +92,6 @@ class PanelSettingsTests(unittest.TestCase):
         cfg = Settings.load(self.root, environ={})
         self.assertEqual(cfg.bms_username, "operator")
         self.assertEqual(cfg.bms_password, "private-password")
-        self.assertEqual(cfg.detector_interval, 0.1)
         self.assertEqual(cfg.recorded_step_delay_seconds, 0.2)
 
     def test_replace_failure_preserves_original_settings(self):

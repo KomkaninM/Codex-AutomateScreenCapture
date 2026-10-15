@@ -25,6 +25,7 @@ from commands import Bot
 from config import RuntimeConfig, Settings
 from detector import VisualDetector, SessionState, SessionGuard
 from line_api import LineAPI, LineAPIError
+from macro_player import MacroPlayer
 from scheduler import Scheduler
 from server import create_app, Dispatcher, startup_banner, single_instance
 from workflow import Workflow
@@ -53,7 +54,7 @@ class IntegrationTests(unittest.TestCase):
         api = api or Mock(text=LineAPI.text, image=LineAPI.image)
         player = Mock()
         detector = detector or Mock(state=lambda: SessionState.LOGGED_IN)
-        guard = SessionGuard(detector, player, settle_delay=0, wait_seconds=0)
+        guard = SessionGuard(detector, player)
         wf = Workflow(
             self.runtime,
             player,
@@ -1094,7 +1095,7 @@ class IntegrationTests(unittest.TestCase):
         shot = bot.workflow.capture("07C")
         self.assertTrue(shot.archive.is_file())
         bot.workflow.player.play.assert_called_once_with("DH07C.json")
-        self.assertEqual(detector.state.call_count, 2)
+        detector.state.assert_called_once_with()
 
     def test_capture_without_login_anchor_skips_navigation_and_settle_wait(self):
         self.runtime = RuntimeConfig(replace(self.runtime.snapshot(), settle_delay=4))
@@ -1104,40 +1105,172 @@ class IntegrationTests(unittest.TestCase):
         bot.workflow.player._wait.assert_not_called()
         self.assertEqual(bot.line.reply.call_args.args[1][1]["type"], "image")
 
-    def test_capture_uses_timeout_fallback_when_login_anchor_stays_visible(
-        self,
-    ):
-        for state in (SessionState.LOGGED_OUT, SessionState.LOGGED_IN):
-            for auto_logout in (False, True):
-                with self.subTest(state=state, auto_logout=auto_logout):
-                    self.runtime = RuntimeConfig(
-                        replace(self.runtime.snapshot(), auto_logout=auto_logout)
-                    )
-                    detector = Mock(state=Mock(return_value=state))
-                    bot = self.make_bot(detector=detector)
-                    bot.workflow.guard.wait_seconds = 0
-                    bot.handle(self.event(), time.monotonic())
-                    self.assertEqual(
-                        bot.line.reply.call_args.args[1][1]["type"], "image"
-                    )
-                    self.assertEqual(
-                        detector.state.call_count,
-                        2 if state == SessionState.LOGGED_OUT else 1,
-                    )
-                    expected = (
-                        ["login_bms.json"] if state == SessionState.LOGGED_OUT else []
-                    )
-                    if auto_logout:
-                        expected.append("logout.json")
-                    self.assertEqual(
-                        [
-                            call.args[0]
-                            for call in bot.workflow.player.play.call_args_list
-                        ],
-                        expected,
-                    )
-                    bot.line.reply.assert_called_once()
-                    bot.line.push.assert_not_called()
+    def test_capture_never_rescans_login_anchor_after_login_macro(self):
+        for auto_logout in (False, True):
+            with self.subTest(auto_logout=auto_logout):
+                self.runtime = RuntimeConfig(
+                    replace(self.runtime.snapshot(), auto_logout=auto_logout)
+                )
+                detector = Mock(state=Mock(return_value=SessionState.LOGGED_OUT))
+                bot = self.make_bot(detector=detector)
+                bot.handle(self.event(), time.monotonic())
+                self.assertEqual(bot.line.reply.call_args.args[1][1]["type"], "image")
+                detector.state.assert_called_once_with()
+                expected = ["login_bms.json"]
+                if auto_logout:
+                    expected.append("logout.json")
+                self.assertEqual(
+                    [
+                        call.args[0]
+                        for call in bot.workflow.player.play.call_args_list
+                    ],
+                    expected,
+                )
+                bot.line.reply.assert_called_once()
+                bot.line.push.assert_not_called()
+
+    def test_scheduled_capture_executes_wait_image_before_delivery(self):
+        macros = self.root / "scripts" / "macros"
+        assets = self.root / "assets"
+        macros.mkdir(parents=True)
+        assets.mkdir()
+        Image.new("RGB", (4, 4), "red").save(assets / "ready.png")
+        (macros / "DH07C.json").write_text(
+            json.dumps(
+                {
+                    "steps": [
+                        {
+                            "action": "wait_image",
+                            "image": "assets/ready.png",
+                            "condition": "appear",
+                            "timeout": 2,
+                            "poll_interval": 0.1,
+                            "consecutive_matches": 2,
+                        },
+                        {"action": "click", "x": 1, "y": 2},
+                    ]
+                }
+            )
+        )
+        order = []
+        gui = Mock()
+        gui.click.side_effect = lambda **kwargs: order.append("click")
+        player = MacroPlayer(
+            macros,
+            project_dir=self.root,
+            gui=gui,
+            sleep=lambda _: None,
+        )
+        guard = SessionGuard(
+            Mock(state=Mock(return_value=SessionState.LOGGED_IN)), player
+        )
+        workflow = Workflow(
+            self.runtime,
+            player,
+            guard,
+            CaptureEngine(
+                self.root / "screenshots",
+                grab=lambda: Image.new("RGB", (100, 80), "green"),
+            ),
+            {"07C": {"macro": "DH07C.json"}},
+        )
+        api = Mock(text=LineAPI.text, image=LineAPI.image)
+        api.push.side_effect = lambda *args: order.append("push")
+        bot = Bot(self.runtime, workflow, api, Mock())
+
+        def visible(*args, **kwargs):
+            order.append("wait")
+            return True
+
+        with patch("detector.image_visible", side_effect=visible):
+            bot._scheduled("07C", "note", threading.Event())
+
+        self.assertEqual(order, ["wait", "wait", "click", "push"])
+
+    def test_failed_wait_prevents_scheduled_capture_and_line_delivery(self):
+        macros = self.root / "scripts" / "macros"
+        assets = self.root / "assets"
+        macros.mkdir(parents=True)
+        assets.mkdir()
+        Image.new("RGB", (4, 4), "red").save(assets / "ready.png")
+        (macros / "DH07C.json").write_text(
+            json.dumps(
+                {
+                    "steps": [
+                        {
+                            "action": "wait_image",
+                            "image": "assets/ready.png",
+                            "condition": "disappear",
+                            "timeout": 2,
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        player = MacroPlayer(macros, project_dir=self.root, gui=Mock())
+        guard = SessionGuard(
+            Mock(state=Mock(return_value=SessionState.LOGGED_IN)), player
+        )
+        capture_engine = Mock()
+        workflow = Workflow(
+            self.runtime,
+            player,
+            guard,
+            capture_engine,
+            {"07C": {"macro": "DH07C.json"}},
+        )
+        api = Mock(text=LineAPI.text, image=LineAPI.image)
+        bot = Bot(self.runtime, workflow, api, Mock())
+
+        with patch(
+            "detector.image_visible", side_effect=AutomationError("screen failed")
+        ), self.assertLogs("macro_player", level="ERROR"):
+            with self.assertRaisesRegex(AutomationError, "screen failed"):
+                bot._scheduled("07C", "note", threading.Event())
+
+        capture_engine.capture.assert_not_called()
+        api.push.assert_not_called()
+
+    def test_missing_wait_image_replies_with_actionable_relative_path(self):
+        macros = self.root / "scripts" / "macros"
+        macros.mkdir(parents=True)
+        (macros / "DH07C.json").write_text(
+            json.dumps(
+                {
+                    "steps": [
+                        {
+                            "action": "wait_image",
+                            "image": "assets/missing.png",
+                            "condition": "appear",
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        player = MacroPlayer(macros, project_dir=self.root, gui=Mock())
+        guard = SessionGuard(
+            Mock(state=Mock(return_value=SessionState.LOGGED_IN)), player
+        )
+        capture_engine = Mock()
+        workflow = Workflow(
+            self.runtime,
+            player,
+            guard,
+            capture_engine,
+            {"07C": {"macro": "DH07C.json"}},
+        )
+        api = Mock(text=LineAPI.text, image=LineAPI.image)
+        bot = Bot(self.runtime, workflow, api, Mock())
+
+        with self.assertLogs("commands", level="ERROR"):
+            bot.handle(self.event("capture 07C"), time.monotonic())
+
+        message = api.reply.call_args.args[1][0]["text"]
+        self.assertIn("wait_image file was not found: assets/missing.png", message)
+        capture_engine.capture.assert_not_called()
+        api.push.assert_not_called()
 
     def test_visual_detection_matches_prototype_correlation_with_brightness_change(
         self,

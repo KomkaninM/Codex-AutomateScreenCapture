@@ -8,8 +8,8 @@ import math
 import time
 from pathlib import Path
 
-from automation_errors import AutomationTimeoutError
-from config import macro_name
+from automation_errors import AutomationError, AutomationTimeoutError
+from config import macro_name, resolve_project_resource
 
 log = logging.getLogger(__name__)
 
@@ -33,8 +33,16 @@ class MacroPlayer:
         clipboard=None,
         sleep=time.sleep,
         max_seconds=35,
+        project_dir=None,
     ):
         self.directory = Path(directory)
+        resolved = self.directory.resolve()
+        inferred_project = (
+            resolved.parent.parent
+            if resolved.name == "macros" and resolved.parent.name == "scripts"
+            else resolved.parent
+        )
+        self.project_dir = Path(project_dir or inferred_project).resolve()
         self._gui = gui
         self._clipboard = clipboard
         self.sleep = sleep
@@ -69,6 +77,24 @@ class MacroPlayer:
     def load(self, name: str):
         return self._validate(self._read(name))
 
+    def _image_path(self, value):
+        try:
+            path = resolve_project_resource(self.project_dir, value)
+        except ValueError as exc:
+            raise AutomationError(f"Invalid wait_image path: {exc}") from None
+        if not path.is_file():
+            raise AutomationError(f"wait_image file was not found: {value}")
+        try:
+            from PIL import Image
+
+            with Image.open(path) as image:
+                image.verify()
+        except Exception as exc:
+            raise AutomationError(
+                f"wait_image file is not a readable image: {value} ({type(exc).__name__})"
+            ) from None
+        return path
+
     def _validate(self, data):
         if isinstance(data, dict) and "desktop" in data:
             desktop = data["desktop"]
@@ -87,7 +113,14 @@ class MacroPlayer:
             if not isinstance(step, dict):
                 raise ValueError("Every macro step must be an object.")
             action = step.get("action", step.get("type"))
-            if action not in ("click", "text", "hotkey", "press", "sleep"):
+            if action not in (
+                "click",
+                "text",
+                "hotkey",
+                "press",
+                "sleep",
+                "wait_image",
+            ):
                 raise ValueError("Unsupported macro action.")
             delay = step.get("delay", 0)
             seconds = step.get("seconds", 0) if action == "sleep" else 0
@@ -123,6 +156,40 @@ class MacroPlayer:
                 not isinstance(step.get("key"), str) or not step["key"]
             ):
                 raise ValueError("Press requires a key.")
+            if action == "wait_image":
+                image = step.get("image")
+                if not isinstance(image, str) or not image.strip():
+                    raise AutomationError(
+                        "wait_image requires a relative image path."
+                    )
+                if step.get("condition") not in ("appear", "disappear"):
+                    raise AutomationError(
+                        "wait_image condition must be appear or disappear."
+                    )
+                for key, default in (
+                    ("timeout", 60),
+                    ("poll_interval", 0.5),
+                    ("confidence", 0.9),
+                ):
+                    value = step.get(key, default)
+                    if (
+                        type(value) not in (int, float)
+                        or not math.isfinite(value)
+                        or value <= 0
+                    ):
+                        raise AutomationError(
+                            f"wait_image {key} must be positive."
+                        )
+                if step.get("confidence", 0.9) > 1:
+                    raise AutomationError(
+                        "wait_image confidence must be at most 1."
+                    )
+                confirmations = step.get("consecutive_matches", 2)
+                if type(confirmations) is not int or confirmations <= 0:
+                    raise AutomationError(
+                        "wait_image consecutive_matches must be a positive integer."
+                    )
+                self._image_path(image)
         if duration > self.max_seconds:
             raise ValueError(
                 "Macro exceeds MAX_MACRO_SECONDS; shorten it for reply-token validity."
@@ -147,9 +214,8 @@ class MacroPlayer:
                 raise ValueError("Unknown keyboard key.")
         started = time.monotonic()
         macro_deadline = started + self.max_seconds
-        stop_at = min(
-            deadline if deadline is not None else float("inf"), macro_deadline
-        )
+        outer_deadline = deadline if deadline is not None else float("inf")
+        stop_at = min(outer_deadline, macro_deadline)
         limit = (
             "LINE reply deadline"
             if deadline is not None and deadline <= macro_deadline
@@ -180,9 +246,21 @@ class MacroPlayer:
         )
         try:
             for index, step in enumerate(steps, 1):
+                stop_at = min(outer_deadline, macro_deadline)
                 self._check(stop_at, cancel)
-                self._play_step(step, stop_at, cancel)
-            self._check(stop_at, cancel)
+                action = step.get("action", step.get("type"))
+                if action == "wait_image":
+                    wait_started = time.monotonic()
+                    self._wait_image(step, outer_deadline, cancel)
+                    macro_deadline += time.monotonic() - wait_started
+                    self._wait(
+                        step.get("delay", 0),
+                        min(outer_deadline, macro_deadline),
+                        cancel,
+                    )
+                else:
+                    self._play_step(step, stop_at, cancel)
+            self._check(min(outer_deadline, macro_deadline), cancel)
         except AutomationTimeoutError as exc:
             elapsed = time.monotonic() - started
             action = step.get("action", step.get("type"))
@@ -191,6 +269,81 @@ class MacroPlayer:
                 f"elapsed {elapsed:.2f}s; {limit} allowed {max(0, remaining):.2f}s. {exc}"
             ) from None
         log.info("Macro completed in %.2fs.", time.monotonic() - started)
+
+    def _wait_image(self, step, outer_deadline, cancel):
+        from detector import image_visible
+
+        relative = step["image"]
+        path = self._image_path(relative)
+        condition = step["condition"]
+        timeout = step.get("timeout", 60)
+        poll = step.get("poll_interval", 0.5)
+        confidence = step.get("confidence", 0.9)
+        required = step.get("consecutive_matches", 2)
+        started = time.monotonic()
+        own_deadline = started + timeout
+        stop_at = min(own_deadline, outer_deadline)
+        streak = 0
+        checks = 0
+
+        def raise_timeout(now):
+            elapsed = now - started
+            limiting = (
+                "LINE reply deadline"
+                if outer_deadline <= own_deadline
+                else f"{timeout:g}s wait timeout"
+            )
+            message = (
+                f"wait_image timed out waiting for {relative} to {condition}; "
+                f"elapsed {elapsed:.2f}s; checks {checks}; {limiting} reached."
+            )
+            log.error(message)
+            raise AutomationTimeoutError(message)
+
+        while True:
+            if cancel is not None and cancel.is_set():
+                raise RuntimeError("Job cancelled.")
+            now = time.monotonic()
+            if now >= stop_at:
+                raise_timeout(now)
+            try:
+                visible = image_visible(path, confidence=confidence)
+            except Exception as exc:
+                log.error(
+                    "wait_image detection failed for %s (%s): %s: %s",
+                    relative,
+                    condition,
+                    type(exc).__name__,
+                    exc,
+                )
+                raise AutomationError(
+                    f"wait_image detection failed for {relative} ({condition}): "
+                    f"{type(exc).__name__}: {exc}"
+                ) from exc
+            checks += 1
+            now = time.monotonic()
+            if now >= stop_at:
+                raise_timeout(now)
+            satisfied = visible if condition == "appear" else not visible
+            streak = streak + 1 if satisfied else 0
+            if streak >= required:
+                log.info(
+                    "wait_image satisfied for %s (%s) after %.2fs and %d checks.",
+                    relative,
+                    condition,
+                    time.monotonic() - started,
+                    checks,
+                )
+                return
+            remaining = stop_at - time.monotonic()
+            if remaining <= 0:
+                continue
+            pause = min(poll, remaining)
+            if cancel is not None:
+                if cancel.wait(pause):
+                    raise RuntimeError("Job cancelled.")
+            else:
+                self.sleep(pause)
 
     def _play_step(self, step, stop_at, cancel):
         gui = self.gui

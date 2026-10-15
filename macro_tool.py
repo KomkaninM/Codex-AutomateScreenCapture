@@ -73,7 +73,14 @@ def convert_legacy(data):
         step = dict(original)
         action = step.pop("action", step.pop("type", None))
         action = aliases.get(action, action)
-        if action not in ("click", "text", "press", "hotkey", "sleep"):
+        if action not in (
+            "click",
+            "text",
+            "press",
+            "hotkey",
+            "sleep",
+            "wait_image",
+        ):
             raise ValueError("Unsupported action in source macro.")
         delay = step.pop("post_delay", default)
         step.setdefault("delay", delay)
@@ -264,6 +271,7 @@ def run(args, cfg):
                 player = MacroPlayer(
                     cfg.macros_dir,
                     max_seconds=cfg.max_macro_seconds,
+                    project_dir=cfg.project_dir,
                 )
                 player.load(name)
                 print(
