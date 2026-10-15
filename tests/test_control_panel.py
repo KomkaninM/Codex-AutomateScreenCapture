@@ -221,6 +221,17 @@ class ControlPanelTests(unittest.TestCase):
             time.sleep(0.01)
         self.fail("Interface action did not complete.")
 
+    def show_layout_window(self, geometry=None):
+        """Map an invisible, non-polling window for geometry assertions."""
+        if self.app.poll_id is not None:
+            self.root.after_cancel(self.app.poll_id)
+        if os.name == "nt":
+            self.root.attributes("-alpha", 0.0)
+        if geometry:
+            self.root.geometry(geometry)
+        self.root.deiconify()
+        self.root.update()
+
     def test_masked_credentials_and_all_configuration_fields_are_available(self):
         from panel_settings import ENV_FIELDS, SECRET_FIELDS
 
@@ -232,9 +243,8 @@ class ControlPanelTests(unittest.TestCase):
         )
 
     def test_macro_anchor_controls_fit_the_default_window(self):
-        self.root.deiconify()
         self.app.show_page("Macros")
-        self.root.update()
+        self.show_layout_window()
         button = self.app.macros.anchor_button
         self.assertTrue(
             button.winfo_viewable(), "Login anchor button must remain visible."
@@ -246,10 +256,8 @@ class ControlPanelTests(unittest.TestCase):
         self.assertTrue(self.app.macros.open_folder_button.winfo_viewable())
 
     def test_dashboard_log_can_be_reached_at_minimum_window_size(self):
-        self.root.deiconify()
-        self.root.geometry("940x620")
         self.app.show_page("Dashboard")
-        self.root.update()
+        self.show_layout_window("940x620")
         page = self.app.pages["Dashboard"]
         page.canvas.yview_moveto(1)
         self.root.update()
@@ -261,10 +269,8 @@ class ControlPanelTests(unittest.TestCase):
         )
 
     def test_target_editor_and_save_fit_minimum_window_size(self):
-        self.root.deiconify()
-        self.root.geometry("940x620")
         self.app.show_page("Targets")
-        self.root.update()
+        self.show_layout_window("940x620")
         for widget in self.app.targets.editor_widgets + [self.app.targets.save_button]:
             self.assertTrue(widget.winfo_viewable())
             self.assertLessEqual(

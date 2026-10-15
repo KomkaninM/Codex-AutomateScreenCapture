@@ -237,7 +237,7 @@ class LauncherTests(unittest.TestCase):
             with self.subTest(change=change), self.assertRaises(RuntimeError):
                 validate_interpreter(info | change)
 
-    def test_launcher_runs_checks_persists_tunnel_and_cleans_up_after_server_exit(self):
+    def test_launcher_skips_developer_suite_persists_tunnel_and_cleans_up_after_server_exit(self):
         (self.root / ".env").write_text(
             "CHANNEL_ACCESS_TOKEN=private\nLINE_CHANNEL_SECRET=private\nGROUP_ID=group\n"
         )
@@ -252,7 +252,7 @@ class LauncherTests(unittest.TestCase):
         self.assertIn("CHANNEL_ACCESS_TOKEN=private", config)
         self.assertIn("NGROK_DOMAIN='bms.ngrok.app'", config)
         self.assertNotIn("PUBLIC_TUNNEL_URL=", config)
-        self.assertTrue(any("unittest" in c.args[0] for c in runner.call_args_list))
+        self.assertFalse(any("unittest" in c.args[0] for c in runner.call_args_list))
         tunnel.terminate.assert_called_once()
 
     def test_configured_ngrok_executable_with_spaces_is_used_automatically(self):

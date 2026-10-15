@@ -395,6 +395,220 @@ class IntegrationTests(unittest.TestCase):
             "Scheduled capture #1\n", bot.line.push.call_args.args[1][0]["text"]
         )
 
+    def test_immediate_max_one_counts_capture_zero_and_completes_once(self):
+        bot = self.make_bot()
+
+        bot.handle(
+            self.event("start-capture 30m morning report -m 1"), time.monotonic()
+        )
+
+        reply_messages = bot.line.reply.call_args.args[1]
+        self.assertIn("Maximum captures: 1", reply_messages[0]["text"])
+        self.assertIn("Scheduled capture #0\n", reply_messages[1]["text"])
+        self.assertEqual(bot.line.push.call_count, 1)
+        completion = bot.line.push.call_args.args[1][0]["text"]
+        self.assertEqual(
+            completion,
+            "✅ Capture Schedule Completed\n\n"
+            "Note: morning report\n"
+            "Pictures Sent: 1/1\n"
+            "Status: Completed",
+        )
+        self.assertNotIn("Reason:", completion)
+        self.assertEqual(bot.scheduler.jobs, {})
+
+    def test_immediate_max_three_sends_zero_one_two_then_completes(self):
+        bot = self.make_bot()
+
+        bot.handle(self.event("start-capture 30m report -m 3"), time.monotonic())
+        job = next(iter(bot.scheduler.jobs.values()))
+        job.capture(job.cancel)
+        job.capture(job.cancel)
+
+        payloads = [call.args[1] for call in bot.line.push.call_args_list]
+        normal_captions = [payload[0]["text"] for payload in payloads[:-1]]
+        self.assertEqual(len(normal_captions), 2)
+        self.assertTrue(normal_captions[0].startswith("Scheduled capture #1\n"))
+        self.assertTrue(normal_captions[1].startswith("Scheduled capture #2\n"))
+        self.assertTrue(all("Pictures Sent:" not in text for text in normal_captions))
+        self.assertIn("Pictures Sent: 3/3", payloads[-1][0]["text"])
+        self.assertEqual(bot.scheduler.jobs, {})
+        with self.assertRaises(RuntimeError):
+            job.capture(job.cancel)
+        self.assertEqual(bot.line.push.call_count, 3)
+
+    def test_timed_max_one_starts_at_one_and_completes(self):
+        bot = self.make_bot()
+
+        bot.handle(
+            self.event("start-capture 30m timed report -s 11:30 -m 1"),
+            time.monotonic(),
+        )
+
+        job = next(iter(bot.scheduler.jobs.values()))
+        reply_messages = bot.line.reply.call_args.args[1]
+        self.assertEqual(len(reply_messages), 1)
+        self.assertIn("Maximum captures: 1", reply_messages[0]["text"])
+        job.capture(job.cancel)
+        payloads = [call.args[1] for call in bot.line.push.call_args_list]
+        self.assertEqual(len(payloads), 2)
+        self.assertTrue(payloads[0][0]["text"].startswith("Scheduled capture #1\n"))
+        self.assertIn("Pictures Sent: 1/1", payloads[1][0]["text"])
+        self.assertEqual(bot.scheduler.jobs, {})
+
+    def test_timed_max_three_sends_one_two_three_then_completes(self):
+        bot = self.make_bot()
+
+        bot.handle(
+            self.event("start-capture 30m timed report --max 3 --starttime 11:30:00"),
+            time.monotonic(),
+        )
+        job = next(iter(bot.scheduler.jobs.values()))
+        for _ in range(3):
+            job.capture(job.cancel)
+
+        payloads = [call.args[1] for call in bot.line.push.call_args_list]
+        self.assertEqual(
+            [payload[0]["text"].splitlines()[0] for payload in payloads[:-1]],
+            [
+                "Scheduled capture #1",
+                "Scheduled capture #2",
+                "Scheduled capture #3",
+            ],
+        )
+        self.assertTrue(
+            all("Pictures Sent:" not in payload[0]["text"] for payload in payloads[:-1])
+        )
+        self.assertIn("Pictures Sent: 3/3", payloads[-1][0]["text"])
+        self.assertEqual(bot.scheduler.jobs, {})
+
+    def test_failed_scheduled_send_does_not_consume_maximum(self):
+        bot = self.make_bot()
+        bot.handle(self.event("start-capture 30m report -m 2"), time.monotonic())
+        job = next(iter(bot.scheduler.jobs.values()))
+        bot.line.push.side_effect = LineAPIError("not accepted")
+
+        with self.assertRaises(LineAPIError):
+            job.capture(job.cancel)
+
+        self.assertIn(job.id, bot.scheduler.jobs)
+        bot.line.push.side_effect = None
+        job.capture(job.cancel)
+        successful_payloads = [
+            call.args[1]
+            for call in bot.line.push.call_args_list
+            if len(call.args[1]) == 1 or call.args[1][1]["type"] == "image"
+        ]
+        self.assertTrue(
+            successful_payloads[-2][0]["text"].startswith("Scheduled capture #1\n")
+        )
+        self.assertIn("Pictures Sent: 2/2", successful_payloads[-1][0]["text"])
+        self.assertEqual(bot.scheduler.jobs, {})
+
+    def test_failed_screenshot_does_not_consume_maximum(self):
+        bot = self.make_bot()
+        bot.handle(self.event("start-capture 30m report -m 2"), time.monotonic())
+        job = next(iter(bot.scheduler.jobs.values()))
+        capture = bot.workflow.capture_engine.capture
+        bot.workflow.capture_engine.capture = Mock(side_effect=RuntimeError("failed"))
+
+        with self.assertRaises(RuntimeError):
+            job.capture(job.cancel)
+
+        self.assertIn(job.id, bot.scheduler.jobs)
+        bot.workflow.capture_engine.capture = capture
+        job.capture(job.cancel)
+        payloads = [call.args[1] for call in bot.line.push.call_args_list]
+        self.assertTrue(payloads[-2][0]["text"].startswith("Scheduled capture #1\n"))
+        self.assertIn("Pictures Sent: 2/2", payloads[-1][0]["text"])
+
+    def test_manual_stop_of_limited_schedule_sends_no_completion(self):
+        bot = self.make_bot()
+        bot.handle(self.event("start-capture 30m report -m 3"), time.monotonic())
+
+        stopped = bot.cancel_schedules()
+
+        self.assertEqual(stopped, 1)
+        self.assertEqual(bot.scheduler.jobs, {})
+        self.assertFalse(
+            any(
+                "Capture Schedule Completed" in call.args[1][0]["text"]
+                for call in bot.line.push.call_args_list
+            )
+        )
+
+    def test_limited_schedules_keep_independent_success_counts(self):
+        bot = self.make_bot()
+        bot.handle(self.event("start-capture 30m first -m 2"), time.monotonic())
+        bot.handle(self.event("start-capture 30m second -m 2"), time.monotonic())
+        first_id, second_id = list(bot.scheduler.jobs)
+        first = bot.scheduler.jobs[first_id]
+        second = bot.scheduler.jobs[second_id]
+
+        first.capture(first.cancel)
+
+        self.assertNotIn(first_id, bot.scheduler.jobs)
+        self.assertIn(second_id, bot.scheduler.jobs)
+        second.capture(second.cancel)
+        self.assertEqual(bot.scheduler.jobs, {})
+        completions = [
+            call.args[1][0]["text"]
+            for call in bot.line.push.call_args_list
+            if "Capture Schedule Completed" in call.args[1][0]["text"]
+        ]
+        self.assertEqual(len(completions), 2)
+
+    def test_unlimited_schedule_does_not_complete_automatically(self):
+        bot = self.make_bot()
+        bot.handle(self.event("start-capture 30m unlimited"), time.monotonic())
+        job = next(iter(bot.scheduler.jobs.values()))
+
+        for _ in range(3):
+            job.capture(job.cancel)
+
+        self.assertIn(job.id, bot.scheduler.jobs)
+        self.assertFalse(
+            any(
+                "Capture Schedule Completed" in call.args[1][0]["text"]
+                for call in bot.line.push.call_args_list
+            )
+        )
+
+    def test_invalid_schedule_options_reply_helpfully_without_capture(self):
+        invalid = {
+            "start-capture 30m note -m 0": "positive integer",
+            "start-capture 30m note -m": "requires a value",
+            "start-capture 30m note -s 25:99": "HH:MM",
+            "start-capture 30m note -s": "requires a value",
+        }
+        for text, expected in invalid.items():
+            with self.subTest(text=text):
+                bot = self.make_bot()
+                bot.workflow.capture = Mock()
+
+                bot.handle(self.event(text), time.monotonic())
+
+                self.assertEqual(bot.scheduler.jobs, {})
+                bot.workflow.capture.assert_not_called()
+                self.assertIn(
+                    expected.lower(),
+                    bot.line.reply.call_args.args[1][0]["text"].lower(),
+                )
+
+    def test_completion_push_occurs_after_final_auto_logout(self):
+        self.runtime = RuntimeConfig(replace(self.runtime.snapshot(), auto_logout=True))
+        bot = self.make_bot()
+        order = []
+        bot.line.reply.side_effect = lambda *args: order.append("capture #0")
+        bot.workflow.player.play.side_effect = lambda *args, **kwargs: order.append(
+            "logout"
+        )
+        bot.line.push.side_effect = lambda *args: order.append("completion")
+
+        bot.handle(self.event("start-capture 30m report -m 1"), time.monotonic())
+
+        self.assertEqual(order, ["capture #0", "logout", "completion"])
+
     def test_failed_initial_capture_removes_only_the_new_schedule(self):
         bot = self.make_bot()
         existing = bot.scheduler.add(

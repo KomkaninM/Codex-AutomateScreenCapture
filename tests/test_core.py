@@ -20,7 +20,7 @@ from detector import SessionGuard, SessionState
 from event_ledger import EventLedger
 from scheduler import Scheduler, parse_interval
 from line_api import LineAPI
-from commands import parse_command
+from commands import HELP, parse_command
 from workflow import Workflow
 from server import create_app, Dispatcher
 
@@ -356,6 +356,62 @@ class CoreTests(unittest.TestCase):
                 parse_interval(bad)
         with self.assertRaises(ValueError):
             parse_command("capture --starttime 25:90", {})
+
+    def test_start_capture_short_and_long_options_are_equivalent(self):
+        commands = (
+            "start-capture 30m generator room -s 11:30 -m 10",
+            "start-capture 30m generator room -m 10 -s 11:30",
+            "start-capture 30m generator room --starttime 11:30 --max 10",
+            "start-capture 30m generator room --max 10 --starttime 11:30:00",
+            "start-capture 30m generator room -s 11:30:00 --max 10",
+            "start-capture 30m generator room --starttime 11:30 -m 10",
+        )
+
+        for text in commands:
+            with self.subTest(text=text):
+                command = parse_command(text, {})
+                self.assertEqual(command.interval, 1800)
+                self.assertEqual(command.note, "generator room")
+                self.assertEqual(command.starttime, "11:30:00")
+                self.assertEqual(getattr(command, "max_captures", None), 10)
+
+    def test_start_capture_without_options_remains_unlimited(self):
+        command = parse_command("start-capture 30m generator room", {})
+
+        self.assertEqual(command.note, "generator room")
+        self.assertIsNone(command.starttime)
+        self.assertIsNone(getattr(command, "max_captures", None))
+
+    def test_existing_single_dash_note_words_remain_compatible(self):
+        command = parse_command("start-capture 30m generator -daily", {})
+
+        self.assertEqual(command.note, "generator -daily")
+
+    def test_start_capture_rejects_invalid_or_missing_option_values(self):
+        invalid = {
+            "start-capture 30m note -m": "maximum",
+            "start-capture 30m note --max": "maximum",
+            "start-capture 30m note -m 0": "positive integer",
+            "start-capture 30m note -m -5": "positive integer",
+            "start-capture 30m note -m abc": "positive integer",
+            "start-capture 30m note -m 1.5": "positive integer",
+            "start-capture 30m note -s": "start time",
+            "start-capture 30m note --starttime": "start time",
+            "start-capture 30m note -s 25:99": "HH:MM",
+            "start-capture 30m note -s 11:30 -s 12:30": "once",
+            "start-capture 30m note -m 2 --max 3": "once",
+        }
+
+        for text, message in invalid.items():
+            with self.subTest(text=text), self.assertRaisesRegex(
+                ValueError, "(?i)" + message
+            ):
+                parse_command(text, {})
+
+    def test_line_help_prefers_short_schedule_options_and_documents_long_aliases(self):
+        self.assertIn("start-capture 30m [note] [-s HH:MM[:SS]] [-m count]", HELP)
+        self.assertIn("--starttime", HELP)
+        self.assertIn("--max", HELP)
 
     def test_scheduler_precheck_ten_seconds_early_and_stop_cancels_dispatch(self):
         now = datetime.fromisoformat("2026-10-09T15:00:00+07:00")

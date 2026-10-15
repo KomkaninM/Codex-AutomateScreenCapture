@@ -462,12 +462,6 @@ def _run_application(project, *, control=None):
         return 0
     if control:
         control.publish("preparing")
-    say("Running application tests...")
-    subprocess.run(
-        [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-v"],
-        cwd=project,
-        check=True,
-    )
     cfg = prepare_configuration(project, interactive=control is None)
     from line_api import LineAPI
 
