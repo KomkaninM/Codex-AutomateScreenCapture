@@ -19,7 +19,7 @@ import numpy as np
 import requests
 from PIL import Image
 
-from automation_errors import AutomationError
+from automation_errors import AutomationError, AutomationTimeoutError
 from capture import CaptureEngine
 from commands import Bot
 from config import RuntimeConfig, Settings
@@ -132,6 +132,35 @@ class IntegrationTests(unittest.TestCase):
         bot.handle(self.event(), time.monotonic() - 46)
         bot.line.reply.assert_not_called()
         bot.line.push.assert_not_called()
+
+    def test_interactive_wait_timeout_reply_identifies_appear_and_disappear(self):
+        for condition in ("appear", "disappear"):
+            with self.subTest(condition=condition):
+                bot = self.make_bot()
+                bot.workflow.capture = Mock(
+                    side_effect=AutomationTimeoutError(
+                        "Macro timed out at step 10/10 (wait_image); "
+                        "wait_image timed out waiting for assets/generator.png "
+                        f"to {condition}; elapsed 10.00s; checks 100."
+                    )
+                )
+
+                bot.handle(
+                    self.event("capture 07C generator report", id=condition),
+                    time.monotonic(),
+                )
+
+                message = bot.line.reply.call_args.args[1][0]["text"]
+                self.assertIn("⚠️ Capture Timed Out", message)
+                self.assertIn("Target: 07C", message)
+                self.assertIn("Macro: DH07C.json", message)
+                self.assertIn("Note: generator report", message)
+                self.assertIn(
+                    f"Timed out waiting for assets/generator.png to {condition}.",
+                    message,
+                )
+                self.assertIn("No picture was captured or sent", message)
+                bot.line.push.assert_not_called()
 
     def test_autologout_waits_for_interactive_and_scheduled_delivery_acknowledgement(
         self,
@@ -280,6 +309,64 @@ class IntegrationTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             bot._scheduled(None, "", cancel)
         self.assertEqual(bot.line.push.call_count, 1)
+
+    def test_scheduled_wait_timeout_push_identifies_appear_and_disappear(self):
+        for condition in ("appear", "disappear"):
+            with self.subTest(condition=condition):
+                bot = self.make_bot()
+                bot.workflow.capture = Mock(
+                    side_effect=AutomationTimeoutError(
+                        "Macro timed out at step 10/10 (wait_image); "
+                        "wait_image timed out waiting for assets/generator.png "
+                        f"to {condition}; elapsed 10.00s; checks 100."
+                    )
+                )
+
+                with self.assertRaises(AutomationTimeoutError):
+                    bot._scheduled(
+                        "07C",
+                        "generator report",
+                        threading.Event(),
+                        job_id="schedule123",
+                    )
+
+                bot.line.push.assert_called_once()
+                messages = bot.line.push.call_args.args[1]
+                self.assertEqual(len(messages), 1)
+                message = messages[0]["text"]
+                self.assertIn("⚠️ Scheduled Capture Timed Out", message)
+                self.assertIn("Schedule Code: schedule123", message)
+                self.assertIn("Target: 07C", message)
+                self.assertIn("Macro: DH07C.json", message)
+                self.assertIn("Note: generator report", message)
+                self.assertIn(
+                    f"Timed out waiting for assets/generator.png to {condition}.",
+                    message,
+                )
+                self.assertIn("Will retry at the next scheduled interval", message)
+
+    def test_one_time_wait_timeout_push_reports_schedule_ended(self):
+        bot = self.make_bot()
+        bot.handle(
+            self.event("capture 07C generator report -s 15:30", id="one-time"),
+            time.monotonic(),
+        )
+        job = next(iter(bot.scheduler.jobs.values()))
+        bot.line.push.reset_mock()
+        bot.workflow.capture = Mock(
+            side_effect=AutomationTimeoutError(
+                "wait_image timed out waiting for assets/generator.png to appear; "
+                "elapsed 10.00s; checks 100."
+            )
+        )
+
+        with self.assertRaises(AutomationTimeoutError):
+            job.capture(job.cancel)
+
+        message = bot.line.push.call_args.args[1][0]["text"]
+        self.assertIn(f"Schedule Code: {job.id}", message)
+        self.assertIn("Schedule ended without a picture", message)
+        self.assertNotIn("Will retry", message)
 
     def test_one_time_schedule_acknowledges_and_sends_only_when_due(self):
         bot = self.make_bot()

@@ -245,6 +245,54 @@ class Bot:
             ]
         )
 
+    @staticmethod
+    def _timeout_error_text(error):
+        match = re.search(
+            r"wait_image timed out waiting for ([^;\r\n]+?) "
+            r"to (appear|disappear);",
+            str(error),
+        )
+        if match:
+            image, condition = match.groups()
+            return f"Timed out waiting for {image} to {condition}."
+        return str(error)
+
+    def _capture_timeout_message(
+        self,
+        error,
+        *,
+        target=None,
+        note="",
+        scheduled=False,
+        job_id=None,
+        recurring=True,
+    ):
+        cfg = self.runtime.snapshot()
+        captured_at = datetime.now(ZoneInfo(cfg.timezone))
+        lines = [
+            "⚠️ Scheduled Capture Timed Out" if scheduled else "⚠️ Capture Timed Out",
+            "",
+        ]
+        if scheduled:
+            lines.append(f"Schedule Code: {job_id or 'Unavailable'}")
+        lines.extend(
+            [
+                f"Timestamp: {captured_at:%Y-%m-%d %H:%M:%S} ({cfg.timezone})",
+                f"Target: {target or 'Default'}",
+                f"Macro: {self._target_macro(target, cfg)}",
+            ]
+        )
+        if note:
+            lines.append(f"Note: {note}")
+        lines.append(f"Error: {self._timeout_error_text(error)}")
+        if scheduled and recurring:
+            lines.append("Status: Will retry at the next scheduled interval.")
+        elif scheduled:
+            lines.append("Status: Schedule ended without a picture.")
+        else:
+            lines.append("Status: No picture was captured or sent.")
+        return "\n".join(lines)
+
     def _complete_schedule(self, job_id, note, progress, cfg):
         if (
             job_id is None
@@ -261,7 +309,9 @@ class Bot:
         )
         return True
 
-    def _scheduled(self, target, note, cancel, progress=None, job_id=None):
+    def _scheduled(
+        self, target, note, cancel, progress=None, job_id=None, recurring=True
+    ):
         progress = progress if progress is not None else ScheduleProgress()
         cfg = self.runtime.snapshot()
         if not cfg.public_tunnel_url or not cfg.delivery_id:
@@ -287,6 +337,29 @@ class Bot:
         delivered_before = progress.successful_captures
         try:
             self.workflow.capture(target, cancel=cancel, deliver=deliver)
+        except AutomationTimeoutError as exc:
+            try:
+                self.line.push(
+                    cfg.delivery_id,
+                    [
+                        self.line.text(
+                            self._capture_timeout_message(
+                                exc,
+                                target=target,
+                                note=note,
+                                scheduled=True,
+                                job_id=job_id,
+                                recurring=recurring,
+                            )
+                        )
+                    ],
+                )
+            except Exception as notification_error:
+                log.error(
+                    "Scheduled timeout notification failed; original timeout preserved: %s",
+                    type(notification_error).__name__,
+                )
+            raise
         finally:
             if progress.successful_captures > delivered_before:
                 self._complete_schedule(job_id, note, progress, cfg)
@@ -316,6 +389,7 @@ class Bot:
         cfg = self.runtime.snapshot()
         messages = None
         reply_attempted = False
+        command = None
         try:
             command = parse_command(event["message"]["text"], self.workflow.targets)
             if command.name == "unknown":
@@ -381,6 +455,7 @@ class Bot:
                             cancel,
                             progress,
                             job_id,
+                            command.interval is not None,
                         ),
                         lambda cancel: self.workflow.prepare(
                             command.target, cancel=cancel
@@ -470,7 +545,20 @@ class Bot:
             ]
         except (AutomationError, AutomationTimeoutError) as exc:
             log.error("Command workflow failed: %s: %s", type(exc).__name__, exc)
-            messages = [self.line.text(f"Automation failed: {exc}")]
+            if isinstance(exc, AutomationTimeoutError) and command is not None and (
+                command.name in ("capture", "start-capture")
+            ):
+                messages = [
+                    self.line.text(
+                        self._capture_timeout_message(
+                            exc,
+                            target=command.target,
+                            note=command.note,
+                        )
+                    )
+                ]
+            else:
+                messages = [self.line.text(f"Automation failed: {exc}")]
         except Exception as exc:
             # Frame locations help debugging without printing exception contents,
             # source lines, or locals that may contain credentials or macro text.
