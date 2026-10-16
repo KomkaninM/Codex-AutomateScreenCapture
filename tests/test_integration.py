@@ -1067,6 +1067,49 @@ class IntegrationTests(unittest.TestCase):
             api.reply("reply", [api.text("ok")])
         self.assertEqual(transport.request.call_count, 1)
 
+    def test_webhook_sync_updates_endpoint_then_verifies_line_can_reach_it(self):
+        transport = Mock()
+        transport.request.side_effect = [
+            Mock(status_code=200, json=lambda: {}, headers={}),
+            Mock(
+                status_code=200,
+                json=lambda: {"success": True, "timestamp": "2026-10-16T00:00:00Z"},
+                headers={},
+            ),
+        ]
+        api = LineAPI("token", session=transport)
+
+        api.synchronize_webhook("https://bms.ngrok.app/callback")
+
+        update, verify = transport.request.call_args_list
+        self.assertEqual(update.args[:2], ("PUT", LineAPI.BASE + "/channel/webhook/endpoint"))
+        self.assertEqual(
+            update.kwargs["json"], {"endpoint": "https://bms.ngrok.app/callback"}
+        )
+        self.assertEqual(verify.args[:2], ("POST", LineAPI.BASE + "/channel/webhook/test"))
+        self.assertEqual(
+            verify.kwargs["json"], {"endpoint": "https://bms.ngrok.app/callback"}
+        )
+
+    def test_webhook_sync_rejects_failed_line_reachability_test(self):
+        transport = Mock()
+        transport.request.side_effect = [
+            Mock(status_code=200, json=lambda: {}, headers={}),
+            Mock(
+                status_code=200,
+                json=lambda: {
+                    "success": False,
+                    "statusCode": 404,
+                    "reason": "Not Found",
+                },
+                headers={},
+            ),
+        ]
+        api = LineAPI("token", session=transport)
+
+        with self.assertRaisesRegex(LineAPIError, "404.*Not Found"):
+            api.synchronize_webhook("https://bms.ngrok.app/callback")
+
     def test_push_retries_keep_same_idempotency_key(self):
         transport = Mock()
         transport.request.side_effect = [

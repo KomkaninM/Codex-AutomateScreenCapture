@@ -1,5 +1,6 @@
 import unittest
 from contextlib import nullcontext
+from os import environ
 from unittest.mock import Mock, patch
 
 from config import Settings, RuntimeConfig
@@ -93,6 +94,37 @@ class StartupTests(unittest.TestCase):
         )
         self.assertEqual(events, ["notification", "online"])
         http.close.assert_called_once()
+
+    def test_launcher_managed_startup_defers_notification_to_launcher(self):
+        cfg = Settings(
+            group_id="group", channel_secret="secret", channel_access_token="token"
+        )
+        bot = Mock(runtime=RuntimeConfig(cfg), line=Mock(text=LineAPI.text))
+        queued = []
+        worker = Mock(submit=lambda fn: queued.append(fn))
+        http = Mock(run=Mock(side_effect=KeyboardInterrupt))
+        control = Mock()
+        control.stop_requested.return_value = False
+        control.watch.return_value = nullcontext()
+
+        with patch.dict(environ, {"BMS_LAUNCHER_MANAGED_STARTUP": "1"}), patch(
+            "server.Settings.load", return_value=cfg
+        ), patch("server.single_instance", return_value=nullcontext()), patch(
+            "server.Dispatcher", return_value=worker
+        ), patch("server.build_bot", return_value=bot), patch(
+            "server.create_app"
+        ), patch("server.startup_banner"), patch("server.signal.signal"), patch(
+            "server.logging.basicConfig"
+        ), patch("server.log.info"), patch(
+            "waitress.create_server", return_value=http
+        ), patch(
+            "runtime_control.environment_control", return_value=control
+        ):
+            main()
+
+        self.assertEqual(queued, [])
+        bot.line.push.assert_not_called()
+        control.publish.assert_not_called()
 
 
 if __name__ == "__main__":

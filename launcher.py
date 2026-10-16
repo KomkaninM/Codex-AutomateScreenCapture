@@ -253,6 +253,30 @@ def stop_owned_process(process):
             diagnostics.join()
 
 
+def wait_for_server(port, process, *, timeout=90):
+    """Wait until the local health endpoint is accepting requests."""
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    stop_at = time.monotonic() + timeout
+    while time.monotonic() < stop_at:
+        exit_code = process.poll()
+        if exit_code is not None:
+            raise RuntimeError(
+                f"The bot server stopped before becoming ready (exit code {exit_code})."
+            )
+        try:
+            with opener.open(
+                f"http://127.0.0.1:{port}/health", timeout=1
+            ) as response:
+                if response.status == 200:
+                    return
+        except OSError:
+            pass
+        time.sleep(0.1)
+    raise RuntimeError(
+        f"The bot server did not become ready on local port {port} within {timeout} seconds."
+    )
+
+
 def select_inspector_port(bot_port, *, separate=False):
     if not separate and bot_port != 4040:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
@@ -476,9 +500,13 @@ def _run_application(project, *, control=None):
         from config import RuntimeConfig
 
         RuntimeConfig(cfg).set_tunnel(url)
-        say("\nIn LINE Developers, set the webhook URL to: " + url + "/callback")
         say(
-            "Enable Use webhook and Webhook redelivery. These settings are done once for a stable domain."
+            "\nThe launcher will update and verify the LINE webhook automatically: "
+            + url
+            + "/callback"
+        )
+        say(
+            "In LINE Developers, enable Use webhook and Webhook redelivery once for this channel."
         )
         say(
             "Starting the bot. Keep this window open; Ctrl+C stops it and the ngrok process this launcher started.\n"
@@ -488,11 +516,22 @@ def _run_application(project, *, control=None):
         server_environment.pop("PUBLIC_TUNNEL_URL", None)
         if control:
             server_environment["BMS_CONTROL_SESSION"] = control.id
+        server_environment["BMS_LAUNCHER_MANAGED_STARTUP"] = "1"
         server = subprocess.Popen(
             [sys.executable, str(project / "server.py")],
             cwd=project,
             env=server_environment,
         )
+        wait_for_server(cfg.port, server)
+        line = LineAPI(cfg.channel_access_token)
+        endpoint = url + "/callback"
+        line.synchronize_webhook(endpoint)
+        say("LINE webhook updated and verified automatically: " + endpoint)
+        from server import send_online_notification
+
+        send_online_notification(cfg, line)
+        if control:
+            control.publish("online", port=cfg.port, webhook=endpoint)
         return server.wait()
     except KeyboardInterrupt:
         say(

@@ -8,6 +8,7 @@ import hashlib
 import hmac
 import json
 import logging
+import os
 import re
 import signal
 import sqlite3
@@ -454,7 +455,8 @@ def main():
                             webhook=cfg.public_tunnel_url + "/callback",
                         )
 
-                dispatcher.submit(announce_online)
+                if os.environ.get("BMS_LAUNCHER_MANAGED_STARTUP") != "1":
+                    dispatcher.submit(announce_online)
                 http.run()
         except KeyboardInterrupt:
             log.info("Stopping scheduler and draining desktop transactions.")

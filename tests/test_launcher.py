@@ -2,9 +2,11 @@ import subprocess
 import io
 import tempfile
 import unittest
+from contextlib import nullcontext
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 from config import Settings
+from line_api import LineAPIError
 
 from launcher import (
     ensure_env_file,
@@ -12,6 +14,7 @@ from launcher import (
     find_tunnel,
     stop_owned_process,
     validate_interpreter,
+    wait_for_server,
     run_application,
     start_tunnel,
     prepare_configuration,
@@ -54,6 +57,15 @@ class LauncherTests(unittest.TestCase):
         inspector = patch("launcher.select_inspector_port", return_value=4040)
         inspector.start()
         self.addCleanup(inspector.stop)
+        ready = patch("launcher.wait_for_server")
+        ready.start()
+        self.addCleanup(ready.stop)
+        webhook = patch("line_api.LineAPI.synchronize_webhook")
+        webhook.start()
+        self.addCleanup(webhook.stop)
+        notification = patch("server.send_online_notification")
+        notification.start()
+        self.addCleanup(notification.stop)
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
@@ -142,6 +154,23 @@ class LauncherTests(unittest.TestCase):
         process.terminate.assert_called_once()
         process.wait.assert_called_once()
 
+    def test_server_readiness_retries_health_until_http_is_available(self):
+        process = Mock()
+        process.poll.return_value = None
+        response = MagicMock()
+        response.status = 200
+        response.__enter__.return_value = response
+        opener = Mock()
+        opener.open.side_effect = [OSError("not ready"), response]
+        with patch(
+            "launcher.urllib.request.build_opener", return_value=opener
+        ), patch("launcher.time.sleep"):
+            wait_for_server(5000, process, timeout=1)
+        self.assertEqual(opener.open.call_count, 2)
+        self.assertEqual(
+            opener.open.call_args.args[0], "http://127.0.0.1:5000/health"
+        )
+
     def test_https_upstream_cannot_forward_to_plain_http_bot(self):
         data = {
             "tunnels": [
@@ -202,6 +231,81 @@ class LauncherTests(unittest.TestCase):
         self.assertEqual(
             popen.call_args.kwargs["env"]["NGROK_DOMAIN"], "actual.ngrok.app"
         )
+
+    def test_startup_waits_for_health_syncs_webhook_then_announces_online(self):
+        (self.root / ".env").write_text(
+            "CHANNEL_ACCESS_TOKEN=private\nLINE_CHANNEL_SECRET=private\nGROUP_ID=group\n"
+        )
+        events = []
+        server = Mock(poll=lambda: 0, wait=lambda: 0)
+        line = Mock()
+        line.synchronize_webhook.side_effect = lambda endpoint: events.append(
+            ("webhook", endpoint)
+        )
+        control = Mock(id="control-id")
+        control.watch.return_value = nullcontext()
+        control.stop_requested.return_value = False
+        control.publish.side_effect = lambda stage, **details: events.append(
+            (stage, details)
+        )
+
+        with patch(
+            "launcher.start_tunnel", return_value=("https://bms.ngrok.app", None)
+        ), patch("launcher.subprocess.Popen", return_value=server) as popen, patch(
+            "launcher.wait_for_server",
+            side_effect=lambda port, process: events.append(("health", port)),
+        ), patch("line_api.LineAPI", return_value=line), patch(
+            "server.send_online_notification",
+            side_effect=lambda cfg, api: events.append(
+                ("notification", cfg.delivery_id)
+            ),
+        ):
+            self.assertEqual(run_application(self.root, control=control), 0)
+
+        self.assertEqual(
+            [event[0] for event in events],
+            [
+                "preparing",
+                "connecting",
+                "health",
+                "webhook",
+                "notification",
+                "online",
+                "stopped",
+            ],
+        )
+        self.assertEqual(events[3][1], "https://bms.ngrok.app/callback")
+        self.assertEqual(events[5][1]["webhook"], "https://bms.ngrok.app/callback")
+        self.assertEqual(
+            popen.call_args.kwargs["env"]["BMS_LAUNCHER_MANAGED_STARTUP"], "1"
+        )
+
+    def test_failed_webhook_verification_stops_owned_server_and_tunnel(self):
+        (self.root / ".env").write_text(
+            "CHANNEL_ACCESS_TOKEN=private\nLINE_CHANNEL_SECRET=private\nGROUP_ID=group\n"
+        )
+        server = Mock()
+        server.poll.return_value = None
+        server.wait.return_value = 0
+        tunnel = Mock()
+        tunnel.poll.return_value = None
+        tunnel.wait.return_value = 0
+        line = Mock()
+        line.synchronize_webhook.side_effect = LineAPIError("verification failed")
+
+        with patch(
+            "launcher.start_tunnel",
+            return_value=("https://bms.ngrok.app", tunnel),
+        ), patch("launcher.subprocess.Popen", return_value=server), patch(
+            "line_api.LineAPI", return_value=line
+        ), patch("server.send_online_notification") as notify, self.assertRaisesRegex(
+            LineAPIError, "verification failed"
+        ):
+            run_application(self.root)
+
+        notify.assert_not_called()
+        server.terminate.assert_called_once()
+        tunnel.terminate.assert_called_once()
 
     def test_ctrl_c_allows_time_for_interactive_capture_and_logout(self):
         (self.root / ".env").write_text(

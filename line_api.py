@@ -132,6 +132,19 @@ class LineAPI:
             ),
         )
 
+    def synchronize_webhook(self, endpoint):
+        """Set this channel's webhook endpoint and verify LINE can reach it."""
+        payload = {"endpoint": endpoint}
+        self._request("PUT", "/channel/webhook/endpoint", payload=payload)
+        result = self._request("POST", "/channel/webhook/test", payload=payload)
+        if result.get("success") is not True:
+            status = result.get("statusCode", "unknown status")
+            reason = result.get("reason", "no reason supplied")
+            raise LineAPIError(
+                f"LINE could not reach the webhook endpoint ({status}: {reason})."
+            )
+        return result
+
     def quota(self):
         limit = self._request("GET", "/message/quota")
         usage = self._request("GET", "/message/quota/consumption")
