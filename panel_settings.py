@@ -271,7 +271,7 @@ class ProjectStore:
                         "modified": path.stat().st_mtime,
                     }
                 )
-            except (OSError, ValueError, AutomationError):
+            except (OSError, ValueError, AutomationError, RecursionError, OverflowError):
                 result.append(
                     {"name": path.name, "steps": "—", "valid": False, "modified": 0}
                 )
@@ -358,7 +358,7 @@ class ProjectStore:
                     project_dir=cfg.project_dir,
                 ).load(name)
                 add(label, True, name)
-            except (OSError, ValueError, AutomationError):
+            except (OSError, ValueError, AutomationError, RecursionError, OverflowError):
                 add(
                     label,
                     False,

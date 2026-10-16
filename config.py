@@ -15,6 +15,8 @@ from zoneinfo import ZoneInfo
 
 from dotenv import dotenv_values, set_key
 
+from app_runtime import bundle_root, project_root
+
 
 def application_root(*, frozen=None, executable=None, module_file=None) -> Path:
     """Return the operator-facing project folder for source or frozen execution."""
@@ -25,8 +27,8 @@ def application_root(*, frozen=None, executable=None, module_file=None) -> Path:
     return source.resolve()
 
 
-BASE_DIR = application_root()
-BUNDLE_DIR = Path(getattr(sys, "_MEIPASS", BASE_DIR)).resolve()
+BASE_DIR = project_root(module_file=__file__)
+BUNDLE_DIR = bundle_root()
 
 
 def resolve_project_resource(project_dir, relative, *, bundle_dir=BUNDLE_DIR) -> Path:

@@ -1,4 +1,4 @@
-"""Own one launcher or macro-tool child and relay bounded, redacted output to Tk."""
+"""Own one launcher or macro-tool child and relay bounded, redacted output to desktop interfaces."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ from pathlib import Path
 
 from dotenv import dotenv_values
 
+from app_runtime import child_command
 from config import Settings, macro_name
 from panel_settings import ENV_FIELDS, SECRET_FIELDS
 from runtime_control import ControlSession
@@ -122,18 +123,14 @@ class ProcessController:
                     "PYTHONUTF8": "1",
                     "PYTHONUNBUFFERED": "1",
                     "BMS_CONTROL_SESSION": self.session.id,
+                    "BMS_PROJECT_DIR": str(self.project),
                 }
             )
-            command = (
-                [
-                    self.python,
-                    str(self.project / "launcher.py"),
-                    "--run",
-                    "--control-session",
-                    self.session.id,
-                ]
-                if mode == "bot"
-                else [self.python, str(self.project / "macro_tool.py"), mode, *args]
+            command = child_command(
+                "launcher" if mode == "bot" else "macro",
+                ["--run", "--control-session", self.session.id] if mode == "bot" else [mode, *args],
+                python=self.python,
+                project=self.project,
             )
             try:
                 self.process = subprocess.Popen(
@@ -213,8 +210,8 @@ class ProcessController:
         with self.lock:
             if not self.busy or self.session is None:
                 return
-            self.state = "stopping"
             self.session.request_stop()
+            self.state = "stopping"
             self._event("state", self.state)
             self._log(
                 "Stop requested. Waiting for active work and owned ngrok cleanup..."
