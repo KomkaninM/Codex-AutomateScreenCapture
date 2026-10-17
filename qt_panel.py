@@ -81,7 +81,11 @@ QLineEdit, QComboBox { background: white; border: 1px solid #cbd6e3; border-radi
 QTableWidget { background: white; alternate-background-color: #f6f8fb; border: 1px solid #d9e1ea; gridline-color: #e6edf4; selection-background-color: #d1eae6; selection-color: #172b45; }
 QHeaderView::section { background: #e6edf4; padding: 8px; border: none; font-weight: 600; }
 QPlainTextEdit { background: #172a40; color: #dae5ee; border-radius: 6px; padding: 10px; }
-QTabBar::tab { padding: 10px 18px; }
+QTabBar::tab { padding: 10px 18px; background: #e6edf4; color: #586b80; border: 1px solid #cbd6e3; border-top-left-radius: 5px; border-top-right-radius: 5px; margin-right: 4px; }
+QTabBar::tab:hover:!selected { background: #d6e3ec; color: #172b45; }
+QTabBar::tab:selected { background: #087f76; color: white; border-color: #087f76; font-weight: 600; }
+QTabBar::tab:disabled { background: #e4e9ef; color: #758495; }
+QTabBar::tab:selected:disabled { background: #5a938d; color: white; border-color: #5a938d; }
 QScrollArea { border: none; }
 """
 
