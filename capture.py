@@ -73,14 +73,18 @@ class CaptureEngine:
         folder = (self.root / partition).resolve()
         if folder.parent != self.root:
             raise ValueError("Screenshot directory escapes storage.")
-        folder.mkdir(parents=True, exist_ok=True)
+        reports = folder / "reports"
+        line = folder / "line"
+        reports.mkdir(parents=True, exist_ok=True)
+        line.mkdir(parents=True, exist_ok=True)
         image = self.grab().convert("RGB")
         captured_at = self.clock()
         stamp = captured_at.astimezone(self.timezone).strftime("%Y%m%d_%H%M%S_%f")[:-3]
         stem = f"shot_{stamp}_{secrets.token_hex(16)}"
         paths = [
-            folder / (stem + suffix)
-            for suffix in (".jpg", "_line.webp", "_preview.webp")
+            reports / (stem + ".jpg"),
+            line / (stem + "_line.webp"),
+            line / (stem + "_preview.webp"),
         ]
         archive_saved = False
         try:

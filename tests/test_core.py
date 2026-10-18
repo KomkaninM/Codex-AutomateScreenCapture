@@ -227,7 +227,10 @@ class CoreTests(unittest.TestCase):
             ("preview", "WEBP"),
         ]:
             path = getattr(shot, name)
-            self.assertEqual(path.parent.name, "07C")
+            self.assertEqual(path.parents[1].name, "07C")
+            self.assertEqual(
+                path.parent.name, "reports" if name == "archive" else "line"
+            )
             with Image.open(path) as img:
                 self.assertEqual(img.format, fmt)
         self.assertNotEqual(shot.archive, engine.capture("07C").archive)
@@ -401,6 +404,23 @@ class CoreTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             parse_command("capture --starttime 25:90", {})
 
+    def test_force_capture_parser_keeps_multiword_note_and_rejects_options(self):
+        command = parse_command("force-capture loading failure screen", {"07C": {}})
+
+        self.assertEqual(command.name, "force-capture")
+        self.assertEqual(command.note, "loading failure screen")
+        self.assertIsNone(command.target)
+        for text in (
+            "force-capture --starttime 11:30",
+            "force-capture -s 11:30",
+            "force-capture --max 2",
+            "force-capture -m 2",
+        ):
+            with self.subTest(text=text), self.assertRaisesRegex(
+                ValueError, "does not accept options"
+            ):
+                parse_command(text, {})
+
     def test_start_capture_short_and_long_options_are_equivalent(self):
         commands = (
             "start-capture 30m generator room -s 11:30 -m 10",
@@ -453,6 +473,7 @@ class CoreTests(unittest.TestCase):
                 parse_command(text, {})
 
     def test_line_help_prefers_short_schedule_options_and_documents_long_aliases(self):
+        self.assertIn("force-capture [note]", HELP)
         self.assertIn("start-capture 30m [note] [-s HH:MM[:SS]] [-m count]", HELP)
         self.assertIn("--starttime", HELP)
         self.assertIn("--max", HELP)

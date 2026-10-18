@@ -90,6 +90,19 @@ class Workflow:
         finally:
             UI_LOCK.release()
 
+    def force_capture(self, *, deadline=None, cancel=None, deliver=None):
+        """Capture the current screen without session checks, waits, or macros."""
+        self._acquire(deadline, cancel)
+        try:
+            self.check(deadline, cancel)
+            shot = self.capture_engine.capture("force")
+            if deliver is not None:
+                self.check(deadline, cancel)
+                deliver(shot)
+            return shot
+        finally:
+            UI_LOCK.release()
+
     def macro(self, name, *, deadline=None, cancel=None):
         self._acquire(deadline, cancel)
         try:
