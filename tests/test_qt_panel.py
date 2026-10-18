@@ -96,7 +96,7 @@ class QtPanelTests(unittest.TestCase):
     def test_pages_and_settings_are_accessible(self):
         self.assertEqual(
             set(self.panel.pages),
-            {"Dashboard", "Settings", "Targets", "Macros", "Help"},
+            {"Dashboard", "Settings", "Targets", "Macros", "Macro Editor", "Help"},
         )
         self.assertEqual(set(self.panel.settings.entries), set(ENV_FIELDS))
         for page in self.panel.pages:

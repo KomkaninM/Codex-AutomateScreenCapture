@@ -77,6 +77,10 @@ class MacroPlayer:
     def load(self, name: str):
         return self._validate(self._read(name))
 
+    def validate(self, data):
+        """Validate an in-memory macro without loading desktop input libraries."""
+        return self._validate(data)
+
     def _image_path(self, value):
         try:
             path = resolve_project_resource(self.project_dir, value)
@@ -157,6 +161,8 @@ class MacroPlayer:
             ):
                 raise ValueError("Press requires a key.")
             if action == "wait_image":
+                if step.get("on_timeout", "stop") not in ("stop", "continue"):
+                    raise AutomationError("wait_image on_timeout must be stop or continue.")
                 image = step.get("image")
                 if not isinstance(image, str) or not image.strip():
                     raise AutomationError(
@@ -297,6 +303,13 @@ class MacroPlayer:
                 f"wait_image timed out waiting for {relative} to {condition}; "
                 f"elapsed {elapsed:.2f}s; checks {checks}; {limiting} reached."
             )
+            if (
+                step.get("on_timeout", "stop") == "continue"
+                and own_deadline < outer_deadline
+                and now < outer_deadline
+            ):
+                log.warning(message + " Continuing as configured.")
+                return
             log.error(message)
             raise AutomationTimeoutError(message)
 
@@ -305,7 +318,7 @@ class MacroPlayer:
                 raise RuntimeError("Job cancelled.")
             now = time.monotonic()
             if now >= stop_at:
-                raise_timeout(now)
+                return raise_timeout(now)
             try:
                 visible = image_visible(path, confidence=confidence)
             except Exception as exc:
@@ -323,7 +336,7 @@ class MacroPlayer:
             checks += 1
             now = time.monotonic()
             if now >= stop_at:
-                raise_timeout(now)
+                return raise_timeout(now)
             satisfied = visible if condition == "appear" else not visible
             streak = streak + 1 if satisfied else 0
             if streak >= required:

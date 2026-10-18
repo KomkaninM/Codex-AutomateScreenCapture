@@ -187,7 +187,7 @@ HELP_PARAGRAPHS = [
         "priority; leave it blank for private chats.\n"
         "\n"
         "4. In Macros, record/import your login macro and select a login-page anchor crop. "
-        "Add wait_image steps to JSON wherever loading must pause, then choose the default "
+        "Use Macro Editor to add Wait Image steps wherever loading must pause, then choose the default "
         "login macro in Settings. Keep the BMS visible and the app minimized during "
         "capture.",
     ),
@@ -248,3 +248,10 @@ HELP_PARAGRAPHS = [
         "is no automatic wait after a macro.",
     ),
 ]
+
+HELP_PARAGRAPHS.append(
+    (
+        "Visual Macro Editor",
+        "Open a macro or choose New. Pick an action and click Add Step, then select a numbered step to edit it. Use Duplicate or Move Up/Down to organize the sequence. Save As keeps the original macro and does not change target mappings.\n\nFor Wait Image, choose a reference inside the project, select appear or disappear, and set a timeout. Stop is the default timeout behavior; Continue explicitly permits the next step after that wait expires. Cancellation, image errors and LINE deadlines still stop the macro. Preview checks the file; Test Image Detection checks the current primary screen once without clicking or typing. A snapshot result does not replace playback's consecutive-match checks.\n\nUnsaved changes are protected by Save / Discard / Cancel prompts. Save waits for active automation to stop safely. Text and existing unsupported configurations are hidden until explicitly revealed; unsupported steps are preserved but must be supported by the executor before saving.",
+    )
+)

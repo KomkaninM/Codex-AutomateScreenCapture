@@ -28,6 +28,7 @@ from config import BASE_DIR, Settings, macro_name
 from line_api import LineAPI
 from panel_process import ProcessController
 from panel_settings import ProjectStore, fingerprint, settings_change_message
+from qt_macro_editor import MacroEditorPage
 from qt_pages import (
     HelpPage,
     MacrosPage,
@@ -47,6 +48,7 @@ PAGE_DESCRIPTIONS = {
     "Settings": "LINE, ngrok, BMS login, image quality, and program preferences.",
     "Targets": "Give each BMS screen a short ID and a descriptive name.",
     "Macros": "Manage the recorded steps used to navigate your BMS.",
+    "Macro Editor": "Create and edit automation steps without writing JSON.",
     "Help": "Setup instructions and everyday commands in one place.",
 }
 STATE_NAMES = {
@@ -79,6 +81,9 @@ QWidget#sidebar QPushButton { background: #14263e; color: #dbe7f1; border: none;
 QWidget#sidebar QPushButton:checked, QWidget#sidebar QPushButton:hover { background: #294960; }
 QLineEdit, QComboBox { background: white; border: 1px solid #cbd6e3; border-radius: 4px; padding: 7px; min-width: 70px; }
 QTableWidget { background: white; alternate-background-color: #f6f8fb; border: 1px solid #d9e1ea; gridline-color: #e6edf4; selection-background-color: #d1eae6; selection-color: #172b45; }
+QListWidget { background: white; border: 1px solid #d9e1ea; }
+QListWidget::item { padding: 6px; }
+QListWidget::item:selected { background: #087f76; color: white; }
 QHeaderView::section { background: #e6edf4; padding: 8px; border: none; font-weight: 600; }
 QPlainTextEdit { background: #172a40; color: #dae5ee; border-radius: 6px; padding: 10px; }
 QTabBar::tab { padding: 10px 18px; background: #e6edf4; color: #586b80; border: 1px solid #cbd6e3; border-top-left-radius: 5px; border-top-right-radius: 5px; margin-right: 4px; }
@@ -119,11 +124,13 @@ class QtControlPanel(QMainWindow):
             TargetsPage(self),
             MacrosPage(self),
         )
+        self.editor = MacroEditorPage(self)
         self.pages.update(
             {
                 "Settings": self.settings,
                 "Targets": self.targets,
                 "Macros": self.macros,
+                "Macro Editor": self.editor,
                 "Help": HelpPage(),
             }
         )
@@ -317,12 +324,12 @@ class QtControlPanel(QMainWindow):
         dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         dialog.open()
 
-    def background(self, function, done=None):
+    def background(self, function, done=None, *, failed=None):
         if self.working or self.closing:
             self.set_notice("Please wait for the current action to finish.")
             return False
         self.working = True
-        self._job(function, done, action=True)
+        self._job(function, done, action=True, failed=failed)
         self.refresh_controls()
         return True
 
@@ -433,6 +440,7 @@ class QtControlPanel(QMainWindow):
         self.settings.refresh_macros()
         set_combo(self.targets.target_macro, self.macro_names)
         self.macros.load(macros, timezone, anchor)
+        self.editor.refresh_files(self.macro_names)
         self.delivery.setText(summary[0])
         self.default_macro.setText(summary[1])
         if summary[2]:
@@ -572,6 +580,7 @@ class QtControlPanel(QMainWindow):
 
             def failed(_):
                 self._stop_pending = False
+                self.editor.pending_save = None
                 self.pending_restart = None
                 self.restart_after_refresh = False
                 self.closing = False
@@ -673,7 +682,7 @@ class QtControlPanel(QMainWindow):
             busy and self.controller.state != "stopping" and not self._stop_pending
         )
         self.quota_button.setEnabled(self.ready and not self.editors_locked)
-        for page in (self.settings, self.targets, self.macros):
+        for page in (self.settings, self.targets, self.macros, self.editor):
             page.update_controls(busy, self.editors_locked)
 
     @Slot(object)
@@ -720,6 +729,8 @@ class QtControlPanel(QMainWindow):
             return
         if self.working:
             return
+        if self.editor.advance_pending():
+            return
         if self.pending_restart and not self.process_busy:
             values, version, previous = self.pending_restart
             self.pending_restart = None
@@ -741,8 +752,13 @@ class QtControlPanel(QMainWindow):
             self.disposed = True
             self.close()
 
-    def request_close(self, *, confirm=True):
+    def request_close(self, *, confirm=True, macro_checked=False):
         if self.closing:
+            return
+        if confirm and not macro_checked and self.editor.dirty:
+            self.editor.guard_unsaved(
+                lambda: self.request_close(confirm=True, macro_checked=True)
+            )
             return
         dirty = self.settings.dirty or self.targets.dirty
         if confirm and (self.process_busy or self.working or dirty):

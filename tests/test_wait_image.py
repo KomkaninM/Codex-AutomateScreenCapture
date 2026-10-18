@@ -110,6 +110,41 @@ class WaitImageMacroTests(unittest.TestCase):
         self.gui.click.assert_called_once()
         return match
 
+    def test_optional_continue_only_ignores_own_wait_timeout(self):
+        self.write([self.wait_step(timeout=1, poll_interval=.25, on_timeout="continue"), {"action": "click", "x": 1, "y": 2}])
+        clock = [0.0]
+        def sleep(seconds):
+            clock[0] += seconds
+        with patch("macro_player.time.monotonic", side_effect=lambda: clock[0]), patch("detector.image_visible", return_value=False):
+            MacroPlayer(self.macros, gui=self.gui, sleep=sleep).play("test.json")
+        self.gui.click.assert_called_once()
+
+    def test_continue_does_not_ignore_outer_deadline_or_detection_errors(self):
+        self.write([self.wait_step(timeout=2, poll_interval=.1, on_timeout="continue"), {"action": "click", "x": 1, "y": 2}])
+        clock = [0.0]
+        def sleep(seconds):
+            clock[0] += seconds
+        with patch("macro_player.time.monotonic", side_effect=lambda: clock[0]), patch("detector.image_visible", return_value=False), self.assertRaises(AutomationTimeoutError):
+            MacroPlayer(self.macros, gui=self.gui, sleep=sleep).play("test.json", deadline=.5)
+        with patch("detector.image_visible", side_effect=AutomationError("read failed")), self.assertRaises(AutomationError):
+            MacroPlayer(self.macros, gui=self.gui).play("test.json")
+        self.gui.click.assert_not_called()
+
+    def test_continue_still_honors_cancellation(self):
+        import threading
+        cancel = threading.Event()
+        cancel.set()
+        self.write([self.wait_step(on_timeout="continue"), {"action": "click", "x": 1, "y": 2}])
+        with self.assertRaisesRegex(RuntimeError, "cancelled"):
+            MacroPlayer(self.macros, gui=self.gui).play("test.json", cancel=cancel)
+        self.gui.click.assert_not_called()
+
+    def test_invalid_timeout_policy_is_rejected_before_input(self):
+        self.write([{"action": "click", "x": 1, "y": 2}, self.wait_step(on_timeout="skip_everything")])
+        with patch("detector.image_visible", return_value=True), self.assertRaisesRegex(AutomationError, "on_timeout"):
+            MacroPlayer(self.macros, gui=self.gui).play("test.json")
+        self.gui.click.assert_not_called()
+
     def test_waits_for_image_to_disappear(self):
         match = self.play_with_results(
             self.wait_step(condition="disappear"), [True, False, False]
