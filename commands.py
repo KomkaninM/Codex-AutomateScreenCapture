@@ -19,7 +19,7 @@ from scheduler import parse_interval, ScheduleCancelled
 
 log = logging.getLogger(__name__)
 HELP = (
-    "Commands: capture [target] [note] [-s HH:MM[:SS]], "
+    "Commands: capture [target] [note] [-s HH:MM[:SS]], force-capture [note], "
     "start-capture 30m [note] [-s HH:MM[:SS]] [-m count], "
     "set-login macro.json, login, macro name.json, "
     "enable-autologout, disable-autologout, check-id, check-quota, stop-capture. "
@@ -68,6 +68,7 @@ def parse_command(text, targets):
     name = parts.pop(0).lower()
     if name not in {
         "capture",
+        "force-capture",
         "start-capture",
         "stop-capture",
         "set-login",
@@ -80,6 +81,14 @@ def parse_command(text, targets):
         "help",
     }:
         return Command("unknown")
+    if name == "force-capture":
+        if any(
+            part.startswith("--")
+            or part in {"-s", "-m", "—starttime", "–starttime"}
+            for part in parts
+        ):
+            raise CommandInputError("force-capture does not accept options.")
+        return Command(name, note=" ".join(parts))
     if name in ("capture", "start-capture"):
         aliases = {
             "-s": "starttime",
@@ -194,15 +203,18 @@ class Bot:
             else cfg.default_login_macro
         )
 
-    def _image_messages(self, shot, note="", *, capture_number=None, target=None):
+    def _image_messages(
+        self, shot, note="", *, capture_number=None, target=None, force=False
+    ):
         cfg = self.runtime.snapshot()
         urls = shot.urls(cfg.public_tunnel_url)
         captured_at = shot.captured_at.astimezone(ZoneInfo(cfg.timezone))
-        heading = (
-            f"Scheduled capture #{capture_number}"
-            if capture_number is not None
-            else "Capture"
-        )
+        if force:
+            heading = "Force capture"
+        elif capture_number is not None:
+            heading = f"Scheduled capture #{capture_number}"
+        else:
+            heading = "Capture"
         caption = (
             f"{heading}\nTimestamp: {captured_at:%Y-%m-%d %H:%M:%S} ({cfg.timezone})"
         )
@@ -431,6 +443,24 @@ class Bot:
             elif command.name == "macro":
                 self.workflow.macro(command.macro, deadline=deadline)
                 messages = [self.line.text("Macro completed.")]
+            elif command.name == "force-capture":
+                if not cfg.public_tunnel_url:
+                    raise ValueError("Configure NGROK_DOMAIN before capture.")
+
+                def deliver_force(shot):
+                    nonlocal reply_attempted
+                    image_messages = self._image_messages(
+                        shot, command.note, force=True
+                    )
+                    self.workflow.check(deadline=deadline)
+                    reply_attempted = True
+                    log.info(
+                        "Sending force-capture image to LINE; waiting for acceptance."
+                    )
+                    self.line.reply(token, image_messages)
+                    log.info("LINE accepted the force-capture image message.")
+
+                self.workflow.force_capture(deadline=deadline, deliver=deliver_force)
             elif command.name in ("capture", "start-capture"):
                 if not cfg.public_tunnel_url:
                     raise ValueError("Configure NGROK_DOMAIN before capture.")

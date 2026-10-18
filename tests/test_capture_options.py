@@ -42,9 +42,11 @@ class CaptureOptionsTests(unittest.TestCase):
                     (OSError, AutomationError)
                 ):
                     engine.capture("report")
-                archives = list((root / "report").glob("*.jpg"))
+                archives = list((root / "report" / "reports").glob("*.jpg"))
                 self.assertEqual(len(archives), 1)
-                self.assertEqual(list((root / "report").glob("*.webp")), [])
+                self.assertEqual(
+                    list((root / "report" / "line").glob("*.webp")), []
+                )
                 with Image.open(archives[0]) as report:
                     self.assertEqual((report.format, report.size), ("JPEG", (300, 200)))
 
@@ -61,7 +63,7 @@ class CaptureOptionsTests(unittest.TestCase):
                 OSError
             ):
                 engine.capture("report")
-            self.assertEqual(list((root / "report").iterdir()), [])
+            self.assertEqual(list((root / "report" / "reports").iterdir()), [])
 
     def test_smart_starttime_dash_preserves_note_and_validates_options(self):
         for command in ("capture 07C", "start-capture 30m 07C"):
@@ -102,7 +104,10 @@ class CaptureOptionsTests(unittest.TestCase):
             with Image.open(shot.original) as image:
                 self.assertEqual((image.format, image.size), ("WEBP", (3000, 2000)))
             self.assertEqual(shot.original, shot.webp)
-            self.assertEqual(len(list(shot.archive.parent.iterdir())), 3)
+            self.assertEqual(shot.archive.parent.name, "reports")
+            self.assertEqual(shot.webp.parent.name, "line")
+            self.assertEqual(len(list(shot.archive.parent.iterdir())), 1)
+            self.assertEqual(len(list(shot.webp.parent.iterdir())), 2)
             self.assertLess(
                 shot.original.stat().st_size, len(baseline.getvalue()) * 0.8
             )

@@ -113,7 +113,8 @@ The template follows the variable names and defaults in the supplied Python conf
 | Command | Behavior |
 | --- | --- |
 | `capture` | Capture the current screen, logging in with the default macro if needed. |
-| `capture 07C [note]` | Use the target macro, save under `screenshots/07C`, and reply with an image. |
+| `capture 07C [note]` | Use the target macro, save the report under `screenshots/07C/reports`, and reply with an image. |
+| `force-capture [note]` | Capture the current screen for diagnosis without login detection, macros, page settling, or auto-logout. |
 | `capture [target] [note] -s 15:30` | Acknowledge now; one-time scheduled push at the next occurrence of this time. `--starttime` is also supported. |
 | `start-capture 30m [target] [note]` | Reply immediately with capture #0, then send recurring pushes starting at #1. |
 | `start-capture 30m [target] [note] -s 15:30` | Acknowledge now; begin recurring pushes with capture #1 at the requested time. |
@@ -139,6 +140,8 @@ Capture
 Timestamp: 2026-10-10 15:30:00 (Asia/Bangkok)
 Note: daily report
 ```
+
+`force-capture [note]` is an interactive diagnostic command. It waits for the existing desktop lock, captures the primary screen into `screenshots/force/reports` and `screenshots/force/line`, and replies with the usual JPEG/WebP output and a `Force capture` caption. It does not inspect the login anchor, run login/navigation/logout macros, execute `wait_image`, or apply `MACRO_SETTLE_DELAY`. It does not support targets or scheduling options.
 
 `start-capture` without `-s`/`--starttime` replies with a structured schedule summary followed by `Scheduled capture #0` and its image. The summary shows the schedule code, readable local start time, interval, target, macro, optional maximum, and optional note. This initial image uses the command's free `replyToken`; recurring pushes begin with `Scheduled capture #1`, then #2, and so on. With `-s`/`--starttime`, the reply contains only the schedule summary and the first pushed image at that time is #1. One-time scheduled captures also begin at #1 when due. Each schedule has its own capture-number counter.
 
@@ -235,11 +238,11 @@ Optional `desktop` metadata has positive integer `width` and `height` fields for
 
 ## Images and tunnel updates
 
-Each capture saves a quality-100 full-resolution archival JPEG (JPEG is not mathematically lossless), a full-resolution delivery WebP, and a WebP thumbnail up to 240 pixels. Both image URLs sent to LINE use WebP, as requested for the operator-tested setup. The delivery image retains every pixel dimension of the captured monitor (for example, 3000 × 2000); only the thumbnail is resized. `LINE_WEBP_QUALITY=80` controls WebP encoding quality on a 1–100 scale; increase it for more detail or decrease it for smaller downloads. This setting does not change the report JPEG. No reduced-quality delivery JPEG is generated. Filenames contain the capture time with milliseconds and a 128-bit random token. Partitions use the requested target or current default macro name.
+Each capture saves a quality-100 full-resolution archival JPEG under `screenshots/<target-or-macro>/reports/`, plus a full-resolution delivery WebP and a WebP thumbnail under `screenshots/<target-or-macro>/line/`. This keeps report images separate from LINE delivery copies. Existing files are left in their original locations; only new captures use the separated folders. Both image URLs sent to LINE use WebP, as requested for the operator-tested setup. The delivery image retains every pixel dimension of the captured monitor (for example, 3000 × 2000); only the thumbnail is resized. `LINE_WEBP_QUALITY=80` controls WebP encoding quality on a 1–100 scale; increase it for more detail or decrease it for smaller downloads. This setting does not change the report JPEG. No reduced-quality delivery JPEG is generated. Filenames contain the capture time with milliseconds and a 128-bit random token. Partitions use the requested target or current default macro name.
 
 LINE's [documented image message formats](https://developers.line.biz/en/reference/messaging-api/#image-message) are JPEG/PNG. WebP delivery follows the operator's tested behavior and is not guaranteed by LINE's published contract. The server returns real `image/webp` content, and the bot does not silently substitute a JPEG if LINE rejects a WebP request. Local tests verify WebP generation, resolution, URLs, MIME types, and routing; a live `capture` on your LINE account verifies acceptance.
 
-Only generated delivery/preview filenames are served under `/images/<path>`. Archival JPEGs and arbitrary files are private. Paths and symlinks cannot escape screenshot storage. All completed image files are retained permanently under `screenshots/<target-or-macro>/`; no background cleanup deletes them. A completed report JPEG is preserved even if subsequent WebP encoding, delivery-size validation, or LINE sending fails; incomplete/failed encoding outputs are removed. Back up that folder for your reports. `IMAGE_TTL_SECONDS=0` is the default and disables public link expiration. A positive value optionally limits public access by file age, without deleting the file. Public URLs act as bearer capabilities: anyone possessing a URL can retrieve that image while it is available. Image links still require the bot, its ngrok domain, and the saved files to remain available; LINE's own storage lifetime is outside this bot's control.
+Only generated delivery/preview filenames are served under `/images/<path>`. Archival JPEGs and arbitrary files are private. Paths and symlinks cannot escape screenshot storage. All completed image files are retained permanently; no background cleanup deletes them. A completed report JPEG is preserved even if subsequent WebP encoding, delivery-size validation, or LINE sending fails; incomplete/failed encoding outputs are removed. Back up the `reports` folders for your reports. `IMAGE_TTL_SECONDS=0` is the default and disables public link expiration. A positive value optionally limits public access by file age, without deleting the file. Public URLs act as bearer capabilities: anyone possessing a URL can retrieve that image while it is available. Image links still require the bot, its ngrok domain, and the saved files to remain available; LINE's own storage lifetime is outside this bot's control.
 
 Set a strong `INTERNAL_API_TOKEN` to enable live tunnel updates. Send an authenticated JSON request to the local service:
 

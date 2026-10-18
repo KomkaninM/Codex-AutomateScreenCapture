@@ -99,6 +99,7 @@ class IntegrationTests(unittest.TestCase):
         image = messages[1]
         self.assertTrue(image["originalContentUrl"].endswith("_line.webp"))
         self.assertTrue(image["previewImageUrl"].endswith("_preview.webp"))
+        self.assertIn("/images/07C/line/", image["originalContentUrl"])
         app = create_app(self.runtime, bot=bot, dispatcher=self.worker)
         with app.test_client() as client, patch(
             "mimetypes.guess_type", return_value=(None, None)
@@ -116,8 +117,30 @@ class IntegrationTests(unittest.TestCase):
                 self.assertEqual(preview.status_code, 200)
                 self.assertEqual(preview.mimetype, "image/webp")
             archive_name = route.rsplit("/", 1)[1].replace("_line.webp", ".jpg")
-            self.assertEqual(client.get("/images/07C/" + archive_name).status_code, 404)
+            self.assertEqual(
+                client.get("/images/07C/reports/" + archive_name).status_code,
+                404,
+            )
             result.close()
+
+    def test_force_capture_sends_current_screen_without_guard_macros_or_logout(self):
+        self.runtime = RuntimeConfig(replace(self.runtime.snapshot(), auto_logout=True))
+        detector = Mock()
+        detector.state.return_value = SessionState.LOGGED_IN
+        bot = self.make_bot(detector=detector)
+
+        bot.handle(
+            self.event("force-capture login failure evidence"), time.monotonic()
+        )
+
+        messages = bot.line.reply.call_args.args[1]
+        self.assertTrue(messages[0]["text"].startswith("Force capture\nTimestamp:"))
+        self.assertIn("Note: login failure evidence", messages[0]["text"])
+        self.assertIn("/images/force/line/", messages[1]["originalContentUrl"])
+        detector.state.assert_not_called()
+        bot.workflow.player.play.assert_not_called()
+        bot.workflow.player._wait.assert_not_called()
+        bot.line.push.assert_not_called()
 
     def test_interactive_failure_and_expiry_never_push(self):
         bot = self.make_bot()
@@ -296,7 +319,11 @@ class IntegrationTests(unittest.TestCase):
                         self.assertEqual(response.status_code, status)
                 self.assertTrue(path.is_file())
                 self.assertTrue(
-                    path.with_name(path.name.replace("_line.webp", ".jpg")).is_file()
+                    (
+                        path.parents[1]
+                        / "reports"
+                        / path.name.replace("_line.webp", ".jpg")
+                    ).is_file()
                 )
 
     def test_scheduled_capture_only_pushes_and_cancelled_job_does_nothing(self):
