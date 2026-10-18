@@ -6,7 +6,7 @@ A desktop BMS bridge with signed LINE webhooks, serialized automation, screensho
 
 ### Windows graphical control panel (recommended)
 
-Double-click **`start_gui.bat`** to open the native control panel. It reuses the existing launcher's Python environment and dependency installation, then closes the setup console after the app opens. No additional Python packages are required; use the standard Windows x64 Python 3.14 or 3.12 installation with **Tcl/Tk support**. The existing `start_bot.bat` console launcher still works. Stop any existing bot/launcher before starting one through the app.
+Double-click **`start_gui.bat`** to open the **PySide6 (Qt for Python)** control panel. It reuses the existing launcher's Python environment, installs the new pinned **PySide6 6.10.2** dependency, checks Qt startup, and closes the setup console after opening the app. Use standard Windows x64 Python 3.14 or 3.12; Tcl/Tk is only needed for the preserved legacy interface. The existing `start_bot.bat` console launcher still works. Stop any existing bot/launcher before starting one through the app.
 
 | Page | What you can do |
 | --- | --- |
@@ -33,6 +33,33 @@ Settings/target writes preserve unknown values and existing comments, reject sta
 Macro import accepts your existing `click_coord`, `type_text`, `press_key`, `wait_image`, and post-delay schema and converts it through the same validated macro engine. Existing filenames are preserved; choose a new name for another recording/import. **Use for login/logout** selects the macro in Settings; save there to apply. The recorder uses **F8** to start/stop/export and **F9** to cancel. Playback gives three seconds to switch to BMS. Recorded text/passwords are not displayed in the macro list or included in logs. Selecting a login anchor replaces `assets/login_anchor.png` and keeps a private backup of the previous image.
 
 **Stop Bot** lets active capture/delivery/logout finish, then closes the server and only the ngrok process this launcher started. It leaves an external tunnel running. Closing the app asks before stopping active work or discarding unsaved changes. GUI shutdown uses a random per-run local control file, without exposing an HTTP shutdown endpoint. Live logs are bounded, credentials are redacted, and the latest log is saved to `.runtime/control_panel.log`.
+
+### Qt architecture and rollback
+
+`qt_panel.py` owns the Qt window and workflow coordination; `qt_pages.py` contains layout-managed views, and `qt_workers.py` runs blocking work in QThreads and batches process events through Qt signals every 100 ms. `gui_content.py` carries the existing settings labels and help text without importing Tkinter. Settings reads/writes, macro validation/imports, LINE requests and subprocess launches run outside the GUI thread. Logs retain at most 800 visible lines; process event delivery has backpressure. The native window frame and Qt layouts support resizing and display scaling. Targets and Macros scroll on small windows.
+
+The Qt UI reuses `ProjectStore` and `ProcessController`. Automation, scheduling, macro interpretation, LINE syntax and delivery remain in their existing modules. The small changes outside presentation provide source/frozen process dispatch, writable data locations, recovery after a failed local stop request, and marking malformed macros as needing repair. No macro schema or automation timing changes are introduced.
+
+The original **`control_panel.py` and `panel_pages.py` are retained unchanged**. To roll back, close the Qt app and wait for active work to finish, then run the following from the source folder (Python must include Tcl/Tk):
+
+```powershell
+.\.venv-launcher\Scripts\pythonw.exe control_panel.py
+```
+
+Both interfaces use the same settings/macros when pointed at the same project folder; run only one interface at a time. `start_gui.bat` continues to select Qt. Direct Qt startup after dependencies are installed is `python app_entry.py`.
+
+### Future Windows executable
+
+`BMSControlPanel.spec` is the single PyInstaller configuration. Build **on Windows x64** in a separate development environment when ready:
+
+```powershell
+python -m pip install -r requirements-build.txt
+python -m PyInstaller --clean --noconfirm BMSControlPanel.spec
+```
+
+Distribute the **entire** `dist/BMSControlPanel` directory. Employees open `BMSControlPanel.exe` without installing Python. Keep `BMSWorker.exe` and `_internal` beside it: the hidden worker handles existing launcher/server/macro roles and captures their console logs. PyInstaller's PySide6 hooks collect Qt platform/image plugins and DLLs; the spec includes timezone data and lazy Windows automation imports. The build has not been produced or validated on Windows as part of this migration.
+
+Source execution uses the source project folder. Packaged execution stores writable `.env`, `targets.json`, external JSON macros, anchors, logs, control files and screenshots under **`%LOCALAPPDATA%\BMSAutomation`**, independent of the installation/current directory. Set **`BMS_PROJECT_DIR` to an absolute writable folder** to use an existing deployment instead, including when launching the legacy source UI. Missing public defaults are seeded without overwriting files; private `.env`, recorded macros, reference images, screenshots and logs are never embedded in the build. Existing external assets take priority over bundled defaults. For a new packaged installation, copy your private `.env`, `targets.json`, `scripts/macros` and `assets` into that data folder and confirm the ngrok path in Settings. Back up or copy existing screenshot archives separately.
 
 ### One-click Windows launcher
 
@@ -270,6 +297,8 @@ python3 -m venv .venv
 
 Tests substitute hardware and LINE HTTP transport while exercising real Flask routing, signature checks, the one-time login pre-check, JSON-controlled image waiting, cancellation, synchronization, scheduling, image encoding, file serving, configuration persistence, and restart deduplication. Desktop libraries are loaded lazily, allowing service tests on a headless machine. Linux desktop operation additionally needs an active X display and a working clipboard provider; Windows is the deployment target.
 
-Control-panel tests also exercise actual Tk widgets, masked fields, saves/restarts, target editing, small-window layouts, stale-edit rejection, and owned subprocess shutdown. They run with an active desktop display and skip on a headless host. To include them in Linux CI, install Tk and Xvfb, then run `xvfb-run -a .venv/bin/python -m unittest discover -s tests -v`. GUI test cleanup collects destroyed windows on the Tk owner thread before starting later workers.
+Qt tests run with `QT_QPA_PLATFORM=offscreen` and exercise all five pages, masked settings, settings/target saves and stale edits, macro/anchor imports, unchanged LINE settings notifications, safe restart/cancellation, bounded logs, worker exceptions, responsiveness under a process lock, minimum-window controls, malformed macros and asynchronous shutdown. Runtime tests cover source/frozen child roles, external data folders and non-overwrite initialization. Legacy Tk widget tests still need an active desktop and skip on a headless host; install Tk and Xvfb and run `xvfb-run -a .venv/bin/python -m unittest discover -s tests -v` to include them. Tests that probe local ports need localhost socket access.
+
+Windows `start_gui.bat` execution, real window dragging/display scaling, PyInstaller output, native recording/clipboard hooks, BMS capture and real LINE/ngrok traffic require local acceptance testing. Automated tests use temporary configuration and mocked hardware/network transport. No live automation is run by the migration checks.
 
 Before unattended deployment, validate a real capture with and without the login anchor, every `wait_image` reference under real BMS loading conditions, each target macro, logout macro execution after LINE acceptance, cancellation during a wait, stop/restart scheduling, ngrok image retrieval by LINE, and actual quota changes for scheduled pushes. No live LINE token or BMS desktop is available in the cloud checkout, so those deployment checks are not represented as completed.

@@ -24,6 +24,8 @@ from ngrok_runner import (
     prepare_auth_config,
 )
 
+from app_runtime import child_command, initialize_project, project_root
+
 ROOT = Path(__file__).resolve().parent
 
 
@@ -164,11 +166,12 @@ def bootstrap(project, *, macro_tool=False, gui=False):
         ) from None
     install_dependencies(project, python)
     if gui:
+        say("Checking PySide6 and Qt Windows plugins. If this fails, reinstall requirements.txt; use standard Python x64.")
         subprocess.run(
             [
                 str(python),
                 "-c",
-                "import tkinter; window=tkinter.Tk(); window.withdraw(); window.destroy()",
+                "from PySide6.QtWidgets import QApplication; app=QApplication([]); app.quit()",
             ],
             check=True,
         )
@@ -176,7 +179,7 @@ def bootstrap(project, *, macro_tool=False, gui=False):
         subprocess.Popen(
             [
                 str(windowed if windowed.exists() else python),
-                str(project / "control_panel.py"),
+                str(project / "app_entry.py"),
             ],
             cwd=project,
         )
@@ -517,10 +520,12 @@ def _run_application(project, *, control=None):
         if control:
             server_environment["BMS_CONTROL_SESSION"] = control.id
         server_environment["BMS_LAUNCHER_MANAGED_STARTUP"] = "1"
+        server_environment["BMS_PROJECT_DIR"] = str(project)
         server = subprocess.Popen(
-            [sys.executable, str(project / "server.py")],
+            child_command("server", project=project),
             cwd=project,
             env=server_environment,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
         wait_for_server(cfg.port, server)
         line = LineAPI(cfg.channel_access_token)
@@ -563,6 +568,7 @@ def main():
             raise RuntimeError(
                 "Double-click start_bot.bat on your Windows PC. This launcher is Windows-only."
             )
+        project = initialize_project(project_root(module_file=__file__))
         if "--run" in sys.argv:
             if "--control-session" in sys.argv:
                 from runtime_control import ControlSession
@@ -570,12 +576,12 @@ def main():
                 index = sys.argv.index("--control-session")
                 if index + 1 >= len(sys.argv):
                     raise ValueError("Missing local control session.")
-                with launcher_lock(ROOT):
+                with launcher_lock(project):
                     return run_application(
-                        ROOT, control=ControlSession(ROOT, sys.argv[index + 1])
+                        project, control=ControlSession(project, sys.argv[index + 1])
                     )
-            return run_application(ROOT)
-        with launcher_lock(ROOT):
+            return run_application(project)
+        with launcher_lock(project):
             return bootstrap(
                 ROOT, macro_tool="--macro-tool" in sys.argv, gui="--gui" in sys.argv
             )

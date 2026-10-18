@@ -23,6 +23,21 @@ from launcher import (
 
 
 class LauncherTests(unittest.TestCase):
+    def test_gui_bootstrap_keeps_code_root_separate_from_external_data(self):
+        import launcher
+        import importlib
+        import os
+        data = self.root / "operator-data"
+        try:
+            with patch.dict(os.environ, {"BMS_PROJECT_DIR": str(data)}):
+                importlib.reload(launcher)
+                with patch("launcher.sys.platform", "win32"), patch("launcher.sys.argv", ["launcher.py", "--gui"]), patch("launcher.launcher_lock", return_value=nullcontext()), patch("launcher.bootstrap", return_value=0) as setup:
+                    self.assertEqual(launcher.main(), 0)
+                self.assertEqual(setup.call_args.args[0], Path(launcher.__file__).resolve().parent)
+                self.assertTrue((data / ".env.example").is_file())
+        finally:
+            importlib.reload(launcher)
+
     def test_gui_bootstrap_uses_prepared_windowed_python_without_waiting_for_gui(self):
         windowed = self.python.with_name("pythonw.exe")
         windowed.touch()
@@ -36,14 +51,14 @@ class LauncherTests(unittest.TestCase):
             self.assertEqual(bootstrap(self.root, gui=True), 0)
         self.assertEqual(
             popen.call_args.args[0],
-            [str(windowed), str(self.root / "control_panel.py")],
+            [str(windowed), str(self.root / "app_entry.py")],
         )
         self.assertEqual(
             run.call_args.args[0],
             [
                 str(self.python),
                 "-c",
-                "import tkinter; window=tkinter.Tk(); window.withdraw(); window.destroy()",
+                "from PySide6.QtWidgets import QApplication; app=QApplication([]); app.quit()",
             ],
         )
         popen.return_value.wait.assert_not_called()

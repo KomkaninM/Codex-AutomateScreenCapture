@@ -23,6 +23,19 @@ class PanelProcessTests(unittest.TestCase):
             "CHANNEL_ACCESS_TOKEN=private-token\nLINE_CHANNEL_SECRET=private-secret\n"
         )
 
+    def test_failed_stop_request_keeps_running_state_for_retry(self):
+        from unittest.mock import Mock
+        controller = ProcessController(self.root)
+        controller.state = "online"
+        controller.session = Mock()
+        controller.session.request_stop.side_effect = PermissionError("locked")
+        with self.assertRaises(PermissionError):
+            controller.stop()
+        self.assertEqual(controller.state, "online")
+        controller.session.request_stop.side_effect = None
+        controller.stop()
+        self.assertEqual(controller.state, "stopping")
+
     def test_sessions_are_isolated_and_invalid_paths_are_rejected(self):
         first, second = ControlSession(self.root), ControlSession(self.root)
         first.publish("online", port=5000)

@@ -10,3 +10,4 @@ numpy==2.3.5
 waitress==3.0.2
 tzdata==2025.2
 pynput==1.8.1; sys_platform == 'win32'
+PySide6==6.10.2
